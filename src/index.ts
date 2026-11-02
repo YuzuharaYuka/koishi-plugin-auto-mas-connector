@@ -6,7 +6,7 @@ import { PLUGIN_NAME, USAGE_MARKDOWN } from './constants'
 import { readPushSetting } from './handlers'
 import { Notifier } from './notify'
 import { PushServer } from './push'
-import { expectedPushAddress, getErrorMessage, logger } from './utils'
+import { debugLog, expectedPushAddress, getErrorMessage, logger, raiseDebugLevel } from './utils'
 
 export * from './config'
 export const name = PLUGIN_NAME
@@ -18,6 +18,8 @@ export const usage = USAGE_MARKDOWN
 
 export function apply(ctx: Context, rawConfig: Config): void {
   const config = normalizeConfig(rawConfig)
+  raiseDebugLevel(config.debug)
+  if (config.debug) logger.info('[调试] 已开启，本插件日志级别提到 debug。')
   const client = new AutoMasClient(config)
   const notifier = new Notifier(ctx, config)
   const push = new PushServer(ctx, config, (payload) => {
@@ -25,6 +27,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
   })
 
   ctx.on('ready', () => {
+    const mode = config.listenMode === 'standalone'
+      ? `独立监听 ${config.host}:${config.port}`
+      : `挂载 ${config.listenPath}`
+    logger.info(`[启动] AUTO-MAS ${config.baseUrl}，推送${mode}，通知目标 ${config.notifyTargets.length} 个。`)
     try {
       push.start()
     } catch (error) {
@@ -49,10 +55,11 @@ async function checkPushSetting(client: AutoMasClient, config: Config): Promise<
       logger.warn('AUTO-MAS 的 Koishi 推送未启用，插件收不到任务通知；在 AUTO-MAS 设置中启用，或执行 mas推送 -e。')
       return
     }
+    debugLog(config.debug, 'push', `AUTO-MAS 推送设置：enabled=${push.enabled}，address=${push.address ?? '(空)'}`)
     if (push.address && push.address !== expected) {
       logger.warn(`AUTO-MAS 推送地址为 ${push.address}，与插件期望的 ${expected} 不一致；可执行 mas推送 -e 修正。`)
     }
   } catch (error) {
-    logger.debug(`检查 AUTO-MAS 推送设置失败: ${getErrorMessage(error)}`)
+    debugLog(config.debug, 'push', `检查 AUTO-MAS 推送设置失败: ${getErrorMessage(error)}`)
   }
 }

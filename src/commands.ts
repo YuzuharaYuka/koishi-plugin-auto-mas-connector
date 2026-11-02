@@ -25,7 +25,7 @@ import {
 } from './handlers'
 import type { Notifier } from './notify'
 import type { ScriptsGetOut } from './types'
-import { clampNumber, expectedPushAddress, formatDate, getErrorMessage, logger, parseIdentity } from './utils'
+import { clampNumber, debugLog, describeFailure, expectedPushAddress, formatDate, getErrorMessage, logger, parseIdentity } from './utils'
 
 export interface CommandDependencies {
   ctx: Context
@@ -76,7 +76,10 @@ export function registerCommands(deps: CommandDependencies): void {
   }
 
   const checkAdmin = (session: Session, label: string): boolean => {
-    if (isAdmin(session)) return true
+    if (isAdmin(session)) {
+      debugLog(config.debug, 'command', `${label} 管理员校验通过（${session.platform}:${session.userId}）`)
+      return true
+    }
     logger.warn(`[权限] ${session.platform}:${session.userId} 尝试使用 ${label}。`)
     void session.send(`该指令仅管理员可用；把 ${session.platform}:${session.userId} 加入管理员配置后即可使用。`)
     return false
@@ -84,13 +87,22 @@ export function registerCommands(deps: CommandDependencies): void {
 
   /** 统一出口：兜住异常，给出可读原因而不是堆栈 */
   const run = async (label: string, task: () => Promise<string | Element | (string | Element)[]>): Promise<string | Element | (string | Element)[]> => {
+    const started = Date.now()
+    debugLog(config.debug, 'command', `${label} 开始`)
     try {
-      return await task()
+      const result = await task()
+      debugLog(config.debug, 'command', `${label} 完成，用时 ${Date.now() - started}ms`)
+      return result
     } catch (error) {
       const message = getErrorMessage(error)
       logger.warn(`[指令] ${label} 失败: ${message}`)
-      return `操作失败：${message}`
+      return `操作失败：${describeFailure(message)}`
     }
+  }
+
+  /** 指令级调试日志：记录参数、匹配结果与关键返回值 */
+  const trace = (label: string, detail: string): void => {
+    debugLog(config.debug, 'command', `${label} ${detail}`)
   }
 
   const alias = <T extends { alias(...names: string[]): T }>(command: T, name: string): T => {
@@ -116,7 +128,9 @@ export function registerCommands(deps: CommandDependencies): void {
     const data = result.data ?? {}
     const ordered = (result.index ?? []).map((item) => item.uid).filter((uid) => data[uid])
     const uids = ordered.length ? ordered : Object.keys(data)
-    return uids.map((uid) => ({ uid, name: data[uid]?.Info?.Name ?? uid }))
+    const users = uids.map((uid) => ({ uid, name: data[uid]?.Info?.Name ?? uid }))
+    trace('加载用户', `脚本 ${scriptId}：${users.length} 个`)
+    return users
   }
 
   const matchUser = (users: ResolvedUser[], token: string): ResolvedUser | undefined => {
@@ -155,7 +169,11 @@ export function registerCommands(deps: CommandDependencies): void {
 
   ctx.command('mas', 'AUTO-MAS 控制')
     .usage(HELP_TEXT)
-    .action(({ session }) => (session ? HELP_TEXT : ''))
+    .action(({ session }) => {
+      if (!session) return ''
+      trace('mas', '显示帮助')
+      return HELP_TEXT
+    })
 
   alias(ctx.command('mas.status', '查看 AUTO-MAS 状态'), 'mas状态')
     .usage('检查后端是否就绪，并列出运行中的任务、已安排的脚本数量与推送状态。')
@@ -170,6 +188,7 @@ export function registerCommands(deps: CommandDependencies): void {
         } catch {
           pushInfo = undefined
         }
+        trace('mas.status', `ready=${String(health.ready)}，运行中 ${snapshot.tasks?.length ?? 0}，已安排 ${snapshot.scheduledScripts?.length ?? 0}，推送 ${pushInfo ? (pushInfo.enabled ? '已启用' : '未启用') : '未知'}`)
         return formatStatus(health, snapshot, pushInfo)
       })
     })
@@ -181,8 +200,14 @@ export function registerCommands(deps: CommandDependencies): void {
     .action(({ session }, taskId) => {
       if (!session) return ''
       return run('mas.task', async () => {
-        if (!taskId) return formatTaskList(await client.getRuntimeSnapshot())
-        return formatTaskStatus(await client.getTask(taskId))
+        if (!taskId) {
+          const snapshot = await client.getRuntimeSnapshot()
+          trace('mas.task', `列出运行中任务：${snapshot.tasks?.length ?? 0} 个`)
+          return formatTaskList(snapshot)
+        }
+        const status = await client.getTask(taskId)
+        trace('mas.task', `查询任务 ${taskId}：${status.status ?? '未知状态'}`)
+        return formatTaskStatus(status)
       })
     })
 
@@ -192,7 +217,11 @@ export function registerCommands(deps: CommandDependencies): void {
     .example('mas.queue')
     .action(({ session, options }) => {
       if (!session) return ''
-      return run('mas.queue', async () => formatQueueList(await client.getQueues(), Boolean(options?.verbose)))
+      return run('mas.queue', async () => {
+        const result = await client.getQueues()
+        trace('mas.queue', `verbose=${Boolean(options?.verbose)}，返回 ${result.index?.length ?? 0} 个队列`)
+        return formatQueueList(result, Boolean(options?.verbose))
+      })
     })
 
   alias(ctx.command('mas.scripts', '查看脚本配置'), 'mas脚本')
@@ -201,7 +230,11 @@ export function registerCommands(deps: CommandDependencies): void {
     .example('mas.scripts')
     .action(({ session, options }) => {
       if (!session) return ''
-      return run('mas.scripts', async () => formatScriptList(await client.getScripts(), Boolean(options?.verbose)))
+      return run('mas.scripts', async () => {
+        const result = await client.getScripts()
+        trace('mas.scripts', `verbose=${Boolean(options?.verbose)}，返回 ${result.index?.length ?? 0} 个脚本`)
+        return formatScriptList(result, Boolean(options?.verbose))
+      })
     })
 
   alias(ctx.command('mas.users [script:string]', '查看脚本下的用户'), 'mas用户')
@@ -214,6 +247,7 @@ export function registerCommands(deps: CommandDependencies): void {
       return run('mas.users', async () => {
         const scripts = await client.getScripts()
         const items = scriptEntries(scripts)
+        trace('mas.users', `脚本 ${items.length} 个，参数「${scriptQuery ?? ''}」`)
         if (!items.length) return 'AUTO-MAS 里还没有脚本配置。'
 
         if (!scriptQuery) {
@@ -223,6 +257,7 @@ export function registerCommands(deps: CommandDependencies): void {
             const count = (result.index?.length ?? 0) || Object.keys(result.data ?? {}).length
             lines.push(`· ${item.name} ${count} 个用户`)
           }
+          trace('mas.users', `概览：${items.length} 个脚本`)
           lines.push('用 mas用户 [脚本] 查看具体用户。')
           return lines.join('\n')
         }
@@ -236,6 +271,7 @@ export function registerCommands(deps: CommandDependencies): void {
           const hint = suggestNames(names, text)
           return [`没有找到名称里包含「${text}」的脚本。`, hint].filter(Boolean).join('\n')
         }
+        trace('mas.users', `命中 ${chosen.length} 个脚本：${chosen.map((item) => item.name).join('、')}`)
         const blocks: string[] = []
         for (const item of chosen.slice(0, 3)) {
           blocks.push(formatUserList(item.name, await client.getUsers(item.uid), Boolean(options?.verbose)))
@@ -254,7 +290,9 @@ export function registerCommands(deps: CommandDependencies): void {
         const span = clampNumber(days ?? 1, 1, 90, 1)
         const end = new Date()
         const start = new Date(end.getTime() - (span - 1) * DAY)
+        trace('mas.history', `${span} 天：${formatDate(start)} ~ ${formatDate(end)}`)
         const result = await client.searchHistory('DAILY', formatDate(start), formatDate(end))
+        trace('mas.history', `返回 ${Object.keys(result.data ?? {}).length} 天记录`)
         return formatHistory(result)
       })
     })
@@ -268,13 +306,16 @@ export function registerCommands(deps: CommandDependencies): void {
       if (!session) return ''
       if (!checkAdmin(session, 'mas.start')) return ''
       const cycle = Boolean(options?.cycle)
+      trace('mas.start', `参数「${query ?? ''}」，循环 ${cycle}`)
       return run('mas.start', async () => {
         if (!query) return describeTargets()
 
         const [scripts, queues] = await Promise.all([client.getScripts(), client.getQueues()])
         const script = findScript(scripts, query)
         if (script) {
+          trace('mas.start', `匹配脚本「${script.name}」（${script.uid}）`)
           const result = await client.startTask(script.uid, 'AutoProxy')
+          trace('mas.start', `脚本任务已提交：${result.taskId}`)
           return `已启动脚本「${script.name}」，任务 ID：${result.taskId}。用 mas.task ${result.taskId} 查看进度。`
         }
         const queue = findQueue(queues, query)
@@ -286,8 +327,10 @@ export function registerCommands(deps: CommandDependencies): void {
           const hint = suggestNames(names, query)
           return [`没有找到 ID 或名称是「${query}」的脚本或队列。`, hint].filter(Boolean).join('\n')
         }
+        trace('mas.start', `匹配队列「${queue.name}」（${queue.uid}），循环 ${cycle}`)
         if (cycle && !queue.cycleEnabled) return `队列「${queue.name}」没有启用循环，请先去掉 -c，或在 AUTO-MAS 里打开循环。`
         const result = await client.startTask(queue.uid, cycle ? 'CycleRun' : 'AutoProxy')
+        trace('mas.start', `队列任务已提交：${result.taskId}`)
         return `已启动队列「${queue.name}」${cycle ? '（循环）' : ''}，任务 ID：${result.taskId}。`
       })
     })
@@ -305,6 +348,7 @@ export function registerCommands(deps: CommandDependencies): void {
         .split(/[,，、\s]+/)
         .map((item) => item.trim())
         .filter(Boolean)
+      trace('mas.startqueue', `队列「${queueQuery ?? ''}」，用户「${tokens.join('、')}」`)
       return run('mas.startqueue', async () => {
         if (!queueQuery) {
           const queues = await client.getQueues()
@@ -317,17 +361,24 @@ export function registerCommands(deps: CommandDependencies): void {
 
         const [queues, scripts] = await Promise.all([client.getQueues(), client.getScripts()])
         const queue = findQueue(queues, queueQuery)
+        if (queue) trace('mas.startqueue', `匹配队列「${queue.name}」（${queue.uid}）`)
         if (!queue) {
           const hint = suggestNames(queueEntries(queues).map((item) => item.name), queueQuery)
           return [`没有找到 ID 或名称是「${queueQuery}」的队列。`, hint].filter(Boolean).join('\n')
         }
 
         const scriptIds = queueScriptIds(await client.getQueueItems(queue.uid))
+        trace('mas.startqueue', `队列项脚本 ${scriptIds.length} 个：${scriptIds.join('、')}`)
         if (!scriptIds.length) {
           return `队列「${queue.name}」里没有已绑定脚本的队列项；先在 AUTO-MAS 里给队列添加脚本。`
         }
 
         const resolution = await resolveQueueUsers(scriptIds, scripts, tokens)
+        trace(
+          'mas.startqueue',
+          `匹配结果：${Object.entries(resolution.queueUserIds).map(([id, users]) => `${id.slice(0, 8)}=${users.length}`).join('，')}；` +
+            `跳过 ${resolution.skipped.length}，未匹配 ${resolution.unmatched.length}，歧义 ${resolution.ambiguous.length}`,
+        )
         if (resolution.ambiguous.length) {
           return [
             `这些用户名在脚本里匹配到多个用户，请写得更具体：${resolution.ambiguous.join('、')}。`,
@@ -362,6 +413,7 @@ export function registerCommands(deps: CommandDependencies): void {
           }
           throw error
         }
+        trace('mas.startqueue', `任务已提交：${result.taskId}，用户 ${users.size} 个，脚本 ${matchedCounts.length} 个`)
         const lines = [`已用 ${users.size} 个用户启动队列「${queue.name}」中的 ${matchedCounts.length} 个脚本，任务 ID：${result.taskId}。`]
         if (resolution.skipped.length) lines.push(`跳过的脚本：${resolution.skipped.join('、')}（这些脚本里没有匹配的用户）。`)
         return lines.join('\n')
@@ -376,7 +428,12 @@ export function registerCommands(deps: CommandDependencies): void {
       if (!session) return ''
       if (!checkAdmin(session, 'mas.stop')) return ''
       return run('mas.stop', async () => {
-        if (!taskId) return formatRunningTasks(await client.getRuntimeSnapshot())
+        if (!taskId) {
+          const snapshot = await client.getRuntimeSnapshot()
+          trace('mas.stop', `列出运行中任务：${snapshot.tasks?.length ?? 0} 个`)
+          return formatRunningTasks(snapshot)
+        }
+        trace('mas.stop', `停止任务 ${taskId}`)
         await client.stopTask(taskId)
         return `已请求停止任务 ${taskId}。用 mas.task ${taskId} 确认状态。`
       })
@@ -391,12 +448,14 @@ export function registerCommands(deps: CommandDependencies): void {
       if (!session) return ''
       if (!checkAdmin(session, 'mas.power')) return ''
       if (!action) return formatPowerHelp()
+      trace('mas.power', `操作「${action}」，确认 ${Boolean(options?.yes)}`)
       const signal = resolvePowerSignal(action)
       if (!signal) {
         return `无法识别电源操作「${action}」；支持：${POWER_SIGNALS.join(' / ')}，也可以用中文（关机、重启、休眠等）。`
       }
       if (!options?.yes) return `即将执行 ${signal}，会中断当前任务。确认请改为：mas.power ${action} -y`
       return run('mas.power', async () => {
+        trace('mas.power', `提交信号 ${signal}`)
         await client.setPower(signal)
         return `已提交电源操作 ${signal}。`
       })
@@ -408,7 +467,12 @@ export function registerCommands(deps: CommandDependencies): void {
     .action(({ session }) => {
       if (!session) return ''
       if (!checkAdmin(session, 'mas.test')) return ''
-      return run('mas.test', () => notify.sendTest())
+      return run('mas.test', async () => {
+        trace('mas.test', `目标 ${config.notifyTargets.length} 个`)
+        const result = await notify.sendTest()
+        trace('mas.test', `结果 ${result.split('\n').length} 行`)
+        return result
+      })
     })
 
   alias(ctx.command('mas.screenshot [title:text]', '截取游戏窗口'), 'mas截图')
@@ -420,26 +484,30 @@ export function registerCommands(deps: CommandDependencies): void {
       if (!session) return ''
       if (!checkAdmin(session, 'mas.screenshot')) return ''
       return run('mas.screenshot', async () => {
+        const mode = options?.adb ? 'adb' : config.screenshotMode
+        trace('mas.screenshot', `方式 ${mode}，窗口「${title?.trim() || config.gameWindow}」`)
         const captureWindow = async () => {
           const result = await client.screenshot(title?.trim() || config.gameWindow)
+          trace('mas.screenshot', `窗口截图返回 ${result.image_base64?.length ?? 0} 字节 base64`)
           return screenshotImage(result, 'AUTO-MAS 没有返回图片，请确认游戏窗口标题是否正确。')
         }
         const captureAdb = async (): Promise<string | Element> => {
           const target = await resolveAdbTarget(client, config)
+          trace('mas.screenshot', `ADB 目标：path=${target.adbPath ?? '(空)'}，serial=${target.serial ?? '(空)'}，备注 ${target.notes.length} 条`)
           if (!target.adbPath || !target.serial) {
             const hint = target.notes.length ? `\n${target.notes.join('\n')}` : ''
             throw new Error(`没有找到可用的 ADB：先启动模拟器，或在「截图」分组填写 adb 路径与设备序列号。${hint}`)
           }
           const result = await client.screenshotAdb(target.adbPath, target.serial)
+          trace('mas.screenshot', `ADB 截图返回 ${result.image_base64?.length ?? 0} 字节 base64`)
           return screenshotImage(result, 'ADB 没有返回图片，请确认设备序列号是否正确。')
         }
-        const mode = options?.adb ? 'adb' : config.screenshotMode
         if (mode === 'adb') return captureAdb()
         if (mode === 'window') return captureWindow()
         try {
           return await captureWindow()
         } catch (windowError) {
-          logger.debug(`[截图] 窗口截图失败，改用 ADB: ${getErrorMessage(windowError)}`)
+          debugLog(config.debug, '截图', `窗口截图失败，改用 ADB: ${getErrorMessage(windowError)}`)
           try {
             return await captureAdb()
           } catch (adbError) {
@@ -465,6 +533,7 @@ export function registerCommands(deps: CommandDependencies): void {
       if (!session) return ''
       if (!checkAdmin(session, 'mas.push')) return ''
       return run('mas.push', async () => {
+        trace('mas.push', `参数「${address ?? ''}」，enable=${Boolean(options?.enable)}，disable=${Boolean(options?.disable)}，test=${Boolean(options?.test)}`)
         if (options?.disable) {
           await client.updateNotifySetting({ IfKoishiSupport: false })
           return '已关闭 AUTO-MAS 的 Koishi 推送。'
@@ -522,6 +591,7 @@ export function registerCommands(deps: CommandDependencies): void {
     .action(({ session }) => {
       if (!session) return ''
       const identity = `${session.platform}:${session.userId}`
+      trace('mas.whoami', `${identity}，管理员 ${isAdmin(session)}`)
       return `你的标识：${identity}\n管理员权限：${isAdmin(session) ? '可用' : '不可用（把上面的标识加入管理员配置即可）'}`
     })
 }

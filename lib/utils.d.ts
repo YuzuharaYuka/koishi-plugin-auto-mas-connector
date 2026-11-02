@@ -5,7 +5,14 @@ export interface Identity {
     userId: string;
 }
 export declare function getErrorMessage(error: unknown): string;
+/**
+ * 打开「调试」开关后，只把插件自己的 logger 级别提到 debug（3），不影响其他插件与 Koishi 全局等级。
+ * 只抬高、不压低：关闭时恢复默认行为，避免覆盖用户在控制台设置过的级别。
+ */
+export declare function raiseDebugLevel(enabled: boolean): void;
 export declare function debugLog(enabled: boolean, scope: string, message: string): void;
+/** 给常见失败补充下一步动作，避免用户只看到原始错误 */
+export declare function describeFailure(message: string): string;
 export declare function truncate(value: string, max?: number): string;
 export declare function clampNumber(value: unknown, min: number, max: number, fallback: number): number;
 export declare function normalizeBaseUrl(value: string): string;

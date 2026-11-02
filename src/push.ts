@@ -45,7 +45,7 @@ export class PushServer {
 
     const server = (this.ctx as ServerContext).server
     if (server?.ws) {
-      this.layer = server.ws(this.config.listenPath, (socket) => this.accept(socket))
+      this.layer = server.ws(this.config.listenPath, (socket, request) => this.accept(socket, request))
       logger.info(`[推送] 已挂载到 Koishi HTTP 服务，路径 ${this.config.listenPath}。`)
       if (!this.config.token) {
         logger.warn('推送令牌为空，任何能访问该端口的程序都可以伪造 AUTO-MAS 通知。')
@@ -89,7 +89,7 @@ export class PushServer {
     })
 
     const wss = new WebSocketServer({ server: http, path: this.config.listenPath })
-    wss.on('connection', (socket) => this.accept(socket))
+    wss.on('connection', (socket, request) => this.accept(socket, request))
     wss.on('error', (error) => logger.warn(`推送服务错误: ${getErrorMessage(error)}`))
 
     this.http = http
@@ -99,20 +99,25 @@ export class PushServer {
     }
   }
 
-  private accept(socket: WebSocket): void {
+  private accept(socket: WebSocket, request?: IncomingMessage): void {
     if (this.stopped) {
       socket.close(1001, 'plugin-dispose')
       return
     }
 
+    const remote = request?.socket.remoteAddress ?? '未知地址'
+    debugLog(this.config.debug, 'push', `新连接：${remote}`)
     let authed = this.config.token === ''
     let timer: ReturnType<typeof setTimeout> | undefined
     if (!authed) {
       timer = setTimeout(() => {
-        logger.warn('[推送] AUTO-MAS 在超时前没有完成认证，已断开连接。')
+        logger.warn(`[推送] ${remote} 在超时前没有完成认证，已断开连接。`)
         socket.close(4001, 'auth-timeout')
       }, AUTH_TIMEOUT)
       timer.unref?.()
+    } else {
+      this.sockets.add(socket)
+      logger.info(`[推送] AUTO-MAS 通知通道已连接（${remote}，未启用令牌）。`)
     }
 
     socket.on('message', (raw) => {
@@ -120,7 +125,7 @@ export class PushServer {
       try {
         message = JSON.parse(raw.toString())
       } catch {
-        debugLog(this.config.debug, 'push', '收到无法解析的消息')
+        logger.warn('[推送] 收到无法解析的消息，已忽略（可能是非 AUTO-MAS 客户端）。')
         return
       }
 
@@ -129,36 +134,54 @@ export class PushServer {
           ? String((message.data as Record<string, unknown>).token)
           : ''
         if (!authed && token !== this.config.token) {
-          logger.warn('[推送] AUTO-MAS 令牌不匹配，已断开连接。')
+          logger.warn(`[推送] ${remote} 的令牌不匹配，已断开连接；请检查插件 token 与 AUTO-MAS 的 KoishiToken 是否一致。`)
           socket.close(4001, 'invalid-token')
           return
         }
+        const firstAuth = !authed
         authed = true
         if (timer) clearTimeout(timer)
         timer = undefined
-        this.sockets.add(socket)
-        logger.info('[推送] AUTO-MAS 通知通道已连接。')
+        if (firstAuth) {
+          this.sockets.add(socket)
+          logger.info(`[推送] AUTO-MAS 通知通道已连接（${remote}，已认证）。`)
+        }
         return
       }
 
-      if (message.type !== 'notify') return
+      if (message.type !== 'notify') {
+        debugLog(this.config.debug, 'push', `忽略未知消息类型：${String(message.type)}`)
+        return
+      }
       if (!authed) {
         socket.close(4001, 'auth-required')
         return
       }
       const payload = message.data
-      if (!payload || typeof payload !== 'object') return
+      if (!payload || typeof payload !== 'object') {
+        logger.warn('[推送] 收到格式无效的通知，已忽略。')
+        return
+      }
+      const record = payload as Record<string, unknown>
+      const kind = typeof record.msgtype === 'string' ? record.msgtype : 'text'
+      const size = typeof record.message === 'string' ? record.message.length : 0
+      debugLog(this.config.debug, 'push', `收到通知：msgtype=${kind}，长度=${size}`)
       this.onNotify(payload as PushPayload)
     })
 
-    socket.on('close', () => {
+    socket.on('close', (code, reason) => {
       if (timer) clearTimeout(timer)
       timer = undefined
-      if (this.sockets.delete(socket)) logger.info('[推送] AUTO-MAS 通知通道已断开。')
+      const wasAuthed = this.sockets.delete(socket)
+      if (wasAuthed) {
+        logger.info(`[推送] AUTO-MAS 通知通道已断开（code=${code}${reason?.length ? `，${reason.toString()}` : ''}）。`)
+      } else {
+        debugLog(this.config.debug, 'push', `未认证连接已关闭（code=${code}）。`)
+      }
     })
 
     socket.on('error', (error) => {
-      debugLog(this.config.debug, 'push', `连接错误: ${getErrorMessage(error)}`)
+      debugLog(this.config.debug, 'push', `连接错误：${getErrorMessage(error)}`)
     })
   }
 }

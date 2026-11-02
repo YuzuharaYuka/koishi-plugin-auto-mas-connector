@@ -12,6 +12,7 @@ export declare function renderPayload(payload: PushPayload, options: {
     sendImages: boolean;
     notifyImage: boolean;
     imageWidth: number;
+    debug: boolean;
 }): Promise<RenderedNotification | undefined>;
 /** 推送正文没有结构化分类，只能按关键词判断；一条通知可能同时命中多类 */
 export declare function classifyNotification(text: string): string[];

@@ -13,7 +13,7 @@ interface RenderedNotification {
 }
 
 /** 按 AUTO-MAS 的 msgtype 渲染通知：text / html / picture */
-export async function renderPayload(payload: PushPayload, options: { sendImages: boolean; notifyImage: boolean; imageWidth: number }): Promise<RenderedNotification | undefined> {
+export async function renderPayload(payload: PushPayload, options: { sendImages: boolean; notifyImage: boolean; imageWidth: number; debug: boolean }): Promise<RenderedNotification | undefined> {
   const type = typeof payload.msgtype === 'string' ? payload.msgtype.toLowerCase() : 'text'
   const message = typeof payload.message === 'string' ? payload.message : ''
   if (!message.trim()) return undefined
@@ -22,7 +22,7 @@ export async function renderPayload(payload: PushPayload, options: { sendImages:
     if (!options.sendImages) return undefined
     const image = decodeBase64Image(message)
     if (!image) {
-      logger.debug('[通知] 收到无法识别的图片推送')
+      debugLog(options.debug, '通知', '收到无法识别的图片推送')
       return undefined
     }
     return { text: 'AUTO-MAS 图片通知', image: image.buffer }
@@ -37,7 +37,7 @@ export async function renderPayload(payload: PushPayload, options: { sendImages:
       if (image) return { text, image }
       debugLog(true, 'notify', 'HTML 渲染图片为空，回退文本')
     } catch (error) {
-      logger.debug(`[通知] HTML 渲染图片失败，回退文本: ${getErrorMessage(error)}`)
+      debugLog(options.debug, '通知', `HTML 渲染图片失败，回退文本: ${getErrorMessage(error)}`)
     }
   }
   return { text }
@@ -113,22 +113,34 @@ export class Notifier {
   ) {}
 
   async handle(payload: PushPayload): Promise<void> {
-    if (!this.config.notifyEnabled) return
+    if (!this.config.notifyEnabled) {
+      debugLog(this.config.debug, 'notify', '通知开关关闭，已忽略推送')
+      return
+    }
 
+    const kind = typeof payload.msgtype === 'string' ? payload.msgtype : 'text'
+    const size = typeof payload.message === 'string' ? payload.message.length : 0
+    debugLog(this.config.debug, 'notify', `收到推送：msgtype=${kind}，长度=${size}`)
     const rendered = await renderPayload(payload, {
       sendImages: this.config.sendImages,
       notifyImage: this.config.notifyImage,
       imageWidth: this.config.imageWidth,
+      debug: this.config.debug,
     })
     if (!rendered) return
 
     const categories = classifyNotification(rendered.text)
+    debugLog(this.config.debug, 'notify', `类别：${categories.join(',')}`)
     if (!this.acceptGlobally(categories)) {
       debugLog(this.config.debug, 'notify', `类别 ${categories.join(',')} 被全局配置过滤`)
       return
     }
 
-    const targets = this.config.notifyTargets.filter((target) => this.acceptTarget(target, categories))
+    const targets = this.config.notifyTargets.filter((target) => {
+      const accepted = this.acceptTarget(target, categories)
+      if (!accepted) debugLog(this.config.debug, 'notify', `${describeTarget(target)} 未订阅类别 ${categories.join(',')}`)
+      return accepted
+    })
     if (!targets.length) {
       if (!this.warned) {
         logger.warn('收到 AUTO-MAS 推送，但没有匹配的推送目标，请检查通知配置。')
@@ -189,22 +201,25 @@ export class Notifier {
       return
     }
 
+    const chunks = rendered.image ? [] : splitMessage(rendered.text)
+    const mode = rendered.image ? '图片' : this.config.mergeForward ? `合并转发 ${chunks.length} 段` : `${chunks.length} 条文本`
     let lastError = ''
     for (const bot of bots) {
       try {
         if (rendered.image) {
           await this.sendTo(bot, target, h.image(rendered.image, 'image/png'))
         } else if (this.config.mergeForward) {
-          await this.sendTo(bot, target, buildForwardMessage(bot, splitMessage(rendered.text)))
+          await this.sendTo(bot, target, buildForwardMessage(bot, chunks))
         } else {
-          for (const chunk of splitMessage(rendered.text)) {
+          for (const chunk of chunks) {
             await this.sendTo(bot, target, chunk)
           }
         }
-        debugLog(this.config.debug, 'notify', `已发送到 ${describeTarget(target)}`)
+        logger.info(`[通知] 已发送到 ${describeTarget(target)}（${mode}）。`)
         return
       } catch (error) {
         lastError = getErrorMessage(error)
+        debugLog(this.config.debug, 'notify', `发送到 ${describeTarget(target)} 失败：${lastError}`)
       }
     }
     logger.warn(`发送通知到 ${describeTarget(target)} 失败: ${describeError(lastError)}`)

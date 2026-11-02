@@ -15,7 +15,7 @@ import type {
   TaskStatus,
   UserGetOut,
 } from './types'
-import { debugLog, getErrorMessage } from './utils'
+import { debugLog, getErrorMessage, logger } from './utils'
 
 export class AutoMasError extends Error {
   constructor(message: string, readonly status?: number, readonly body?: string) {
@@ -34,6 +34,8 @@ export class AutoMasClient {
   /** 发送请求并拆掉 AUTO-MAS 的 { success, data } 信封；失败时抛出带下一步提示的错误 */
   async request<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
     const method = init.method ?? 'GET'
+    const started = Date.now()
+    debugLog(this.config.debug, 'client', `请求 ${method} ${path}`)
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (init.body !== undefined) headers['Content-Type'] = 'application/json'
 
@@ -46,10 +48,11 @@ export class AutoMasClient {
         signal: AbortSignal.timeout(this.config.timeout),
       })
     } catch (error) {
-      if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
-        throw new AutoMasError(`请求超时（${this.config.timeout} 毫秒）：${this.config.baseUrl}${path}`)
-      }
-      throw new AutoMasError(`无法连接 AUTO-MAS（${this.config.baseUrl}）：${getErrorMessage(error)}`)
+      const message = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
+        ? `请求超时（${this.config.timeout} 毫秒）：${this.config.baseUrl}${path}`
+        : `无法连接 AUTO-MAS（${this.config.baseUrl}）：${getErrorMessage(error)}`
+      logger.warn(`[请求] ${method} ${path} 失败：${message}`)
+      throw new AutoMasError(message)
     }
 
     const text = await response.text()
@@ -62,7 +65,9 @@ export class AutoMasClient {
 
     if (!response.ok) {
       const message = readMessage(payload) ?? text.slice(0, 200)
-      throw new AutoMasError(`AUTO-MAS 返回 HTTP ${response.status}${message ? `：${message}` : ''}`, response.status, text.slice(0, 500))
+      const detail = `AUTO-MAS 返回 HTTP ${response.status}${message ? `：${message}` : ''}`
+      logger.warn(`[请求] ${method} ${path} 失败：${detail}`)
+      throw new AutoMasError(detail, response.status, text.slice(0, 500))
     }
 
     if (payload && typeof payload === 'object') {
@@ -72,7 +77,7 @@ export class AutoMasClient {
           const message = readMessage(payload) ?? '未提供原因'
           throw new AutoMasError(`AUTO-MAS 拒绝了该操作：${message}`)
         }
-        debugLog(this.config.debug, 'client', `${method} ${path} -> success`)
+        debugLog(this.config.debug, 'client', `${method} ${path} -> success，用时 ${Date.now() - started}ms`)
         return record.data as T
       }
       if (typeof record.code === 'number' && record.code >= 400) {
@@ -81,7 +86,7 @@ export class AutoMasClient {
       }
     }
 
-    debugLog(this.config.debug, 'client', `${method} ${path} -> ok`)
+    debugLog(this.config.debug, 'client', `${method} ${path} -> ok，用时 ${Date.now() - started}ms`)
     return payload as T
   }
 
