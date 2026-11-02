@@ -60,16 +60,16 @@ webhook 与 Koishi 是两种通道：指向 `/AUTO_MAS` 的 HTTP POST 属于 web
 | 指令 | 别名 | 说明 |
 | :--- | :--- | :--- |
 | `mas.status` | `mas状态` | 后端状态、运行任务与推送状态 |
-| `mas.task [任务ID]` | `mas任务` | 任务列表；带 ID 查结果 |
+| `mas.task [任务ID]` | `mas任务` | 任务列表；带完整 ID 或前缀查结果 |
 | `mas.queue` | `mas队列` | 调度队列；`-v` 显示完整 ID |
 | `mas.scripts` | `mas脚本` | 脚本配置；`-v` 显示完整 ID |
 | `mas.users [脚本]` | `mas用户` | 脚本用户；`-v` 显示完整 ID |
 | `mas.history [天数]` | `mas历史` | 执行历史，默认 1 天 |
 | `mas.start [名称]` | `mas启动` | 启动脚本或队列；`-c` 循环执行队列 |
 | `mas.startqueue [队列] [用户...]` | `mas开队` | 指定用户启动队列 |
-| `mas.stop [任务ID]` | `mas停止` | 停止任务 |
+| `mas.stop [任务ID]` | `mas停止` | 停止任务；支持完整 ID 或运行中任务 ID 的前缀 |
 | `mas.power [操作] -y` | `mas电源` | 任务结束后关机、重启、休眠等 |
-| `mas.process [操作] -y` | `mas进程` | 查看、关闭、启动或重启 AUTO-MAS；同机关闭整个程序 |
+| `mas.process [操作] -y` | `mas进程` | 查看、关闭、启动或重启 AUTO-MAS；同机关闭整个程序，无桌面会话时会在登录会话中启动 |
 | `mas.screenshot [窗口]` | `mas截图` | 按配置截图；`-a` 用 ADB |
 | `mas.push [地址]` | `mas推送` | 查看或修改推送设置；`-e` 启用、`-d` 关闭、`-t` 测试 |
 | `mas.test` | `mas测试` | 给聊天目标发测试通知 |

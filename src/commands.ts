@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { existsSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { h, type Context, type Element, type Session } from 'koishi'
 import type { AutoMasClient } from './client'
 import type { Config } from './config'
@@ -38,6 +39,7 @@ export interface CommandDependencies {
 }
 
 const DAY = 86_400_000
+const NL = String.fromCharCode(10)
 
 function queueEntries(result: { index?: Array<{ uid: string }>; data?: Record<string, { Info?: { Name?: string } }> }): Array<{ uid: string; name: string }> {
   return (result.index ?? []).map((item) => ({ uid: item.uid, name: result.data?.[item.uid]?.Info?.Name ?? '未命名' }))
@@ -138,6 +140,15 @@ export function registerCommands(deps: CommandDependencies): void {
     }
   }
 
+  /** 按完整 ID 或唯一前缀在运行中任务里查找任务 */
+  const resolveTaskId = (snapshot: { tasks?: Array<{ taskId: string }> }, input: string): { id?: string; candidates: string[] } => {
+    const ids = (snapshot.tasks ?? []).map((task) => task.taskId)
+    if (ids.includes(input)) return { id: input, candidates: [] }
+    const matches = ids.filter((id) => id.startsWith(input))
+    if (matches.length === 1) return { id: matches[0], candidates: [] }
+    return { candidates: matches }
+  }
+
   const waitForHealth = async (wantReady: boolean, seconds: number): Promise<boolean> => {
     const deadline = Date.now() + seconds * 1000
     let interval = 1000
@@ -209,6 +220,75 @@ export function registerCommands(deps: CommandDependencies): void {
       logger.info(`[进程] 已自动识别 AUTO-MAS 启动路径：${detected}`)
     }
     return detected
+  }
+
+  /** 当前进程所在会话是否存在可见桌面 */
+  const hasInteractiveDesktop = (): boolean => {
+    const output = runPowerShell(
+      "$sid=(Get-Process -Id $PID).SessionId; $ex=@(Get-Process explorer -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SessionId -Unique); \"{0}|{1}\" -f $sid, ($ex -join ',')"
+    )
+    const [sidText, sessionText] = output.split('|')
+    const sid = Number.parseInt(sidText ?? '', 10)
+    const sessions = (sessionText ?? '')
+      .split(',')
+      .map((value) => Number.parseInt(value, 10))
+      .filter((value) => !Number.isNaN(value))
+    if (Number.isNaN(sid) || sessions.length === 0) return true
+    return sessions.includes(sid)
+  }
+
+  const LAUNCH_TASK = 'Koishi-AUTO-MAS-Launcher'
+
+  /** 在登录用户的交互会话里通过计划任务启动，避免 Session 0 启动后没有窗口 */
+  const launchViaTask = (exePath: string): boolean => {
+    const userSid = runPowerShell('([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value')
+    if (!userSid) return false
+    const escape = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    const xml = `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers />
+  <Principals>
+    <Principal id="Author">
+      <UserId>${escape(userSid)}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>${escape(exePath)}</Command>
+      <WorkingDirectory>${escape(dirname(exePath))}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>`
+    const file = join(tmpdir(), 'auto-mas-connector-launch.xml')
+    try {
+      writeFileSync(file, '﻿' + xml, 'utf16le')
+      const create = spawnSync('schtasks', ['/Create', '/TN', LAUNCH_TASK, '/XML', file, '/F'], { windowsHide: true, encoding: 'utf8' })
+      const runTask = spawnSync('schtasks', ['/Run', '/TN', LAUNCH_TASK], { windowsHide: true, encoding: 'utf8' })
+      if (create.status !== 0 || runTask.status !== 0) {
+        logger.warn(`[进程] 计划任务启动失败：${String(create.stderr || runTask.stderr || '').trim()}`)
+        return false
+      }
+      debugLog(config.debug, 'process', `已通过计划任务在交互会话启动 ${exePath}`)
+      return true
+    } finally {
+      rmSync(file, { force: true })
+    }
   }
 
   const spawnMas = (exePath: string): void => {
@@ -320,7 +400,7 @@ export function registerCommands(deps: CommandDependencies): void {
     })
 
   alias(ctx.command('mas.task [taskId:string]', '查看任务状态'), 'mas任务')
-    .usage('不带参数时列出运行中的任务；带任务 ID 时查询该任务的结果。')
+    .usage('不带参数时列出运行中的任务；带完整任务 ID 或运行中任务 ID 的前缀时查询该任务的结果。')
     .example('mas.task')
     .example('mas.task 0f6f0c8e-2f4a-4a7f-9f2e-8f6a1c3d5b7e')
     .action(({ session }, taskId) => {
@@ -331,8 +411,20 @@ export function registerCommands(deps: CommandDependencies): void {
           trace('mas.task', `列出运行中任务：${snapshot.tasks?.length ?? 0} 个`)
           return formatTaskList(snapshot)
         }
-        const status = await client.getTask(taskId)
-        trace('mas.task', `查询任务 ${taskId}：${status.status ?? '未知状态'}`)
+        let resolvedId = taskId
+        if (!/^[0-9a-f-]{36}$/i.test(taskId)) {
+          const snapshot = await client.getRuntimeSnapshot()
+          const resolved = resolveTaskId(snapshot, taskId)
+          if (!resolved.id) {
+            if (resolved.candidates.length) {
+              return [`有多个任务匹配「${taskId}」`, ...resolved.candidates.map((id) => `· ${id}`), '请改用更长的 ID'].join(NL)
+            }
+            return `运行中的任务里没有匹配「${taskId}」的 ID${NL}用 mas.task 查看运行中的任务，或粘贴完整任务 ID`
+          }
+          resolvedId = resolved.id
+        }
+        const status = await client.getTask(resolvedId)
+        trace('mas.task', `查询任务 ${resolvedId}：${status.status ?? '未知状态'}`)
         return formatTaskStatus(status)
       })
     })
@@ -549,7 +641,7 @@ export function registerCommands(deps: CommandDependencies): void {
     })
 
   alias(ctx.command('mas.stop [taskId:string]', '停止任务'), 'mas停止')
-    .usage('不带参数时列出运行中的任务；带任务 ID 时停止该任务。')
+    .usage('不带参数时列出运行中的任务；带完整任务 ID 或运行中任务 ID 的前缀时停止该任务。')
     .example('mas.stop')
     .example('mas.stop 0f6f0c8e-2f4a-4a7f-9f2e-8f6a1c3d5b7e')
     .action(({ session }, taskId) => {
@@ -561,9 +653,22 @@ export function registerCommands(deps: CommandDependencies): void {
           trace('mas.stop', `列出运行中任务：${snapshot.tasks?.length ?? 0} 个`)
           return formatRunningTasks(snapshot)
         }
-        trace('mas.stop', `停止任务 ${taskId}`)
-        await client.stopTask(taskId)
-        return `已请求停止任务 ${taskId}\n用 mas.task ${taskId} 确认状态`
+        let resolvedId = taskId
+        if (!/^[0-9a-f-]{36}$/i.test(taskId)) {
+          const snapshot = await client.getRuntimeSnapshot()
+          const resolved = resolveTaskId(snapshot, taskId)
+          if (!resolved.id) {
+            if (resolved.candidates.length) {
+              return [`有多个任务匹配「${taskId}」`, ...resolved.candidates.map((id) => `· ${id}`), '请改用更长的 ID'].join(NL)
+            }
+            return `运行中的任务里没有匹配「${taskId}」的 ID${NL}用 mas停止 列出运行中的任务，或粘贴完整任务 ID`
+          }
+          resolvedId = resolved.id
+        }
+        trace('mas.stop', `停止任务 ${resolvedId}`)
+        await client.stopTask(resolvedId)
+        return `已请求停止任务 ${resolvedId}
+用 mas.task ${resolvedId} 确认状态`
       })
     })
 
@@ -653,7 +758,11 @@ export function registerCommands(deps: CommandDependencies): void {
         const gone = await waitForProcessExit(15)
         trace('mas.process', `清理旧进程：${gone ? '完成' : '超时'}`)
         if (!gone) return '旧进程没有完全退出，已取消启动，避免出现两个实例'
-        spawnMas(exePath)
+        if (!hasInteractiveDesktop() && launchViaTask(exePath)) {
+          trace('mas.process', '会话无桌面，已改用计划任务启动')
+        } else {
+          spawnMas(exePath)
+        }
         const ready = await waitForHealth(true, config.processTimeout)
         if (!ready) return '已启动进程，但在等待时间内没有就绪\n请查看 AUTO-MAS 的日志'
         const next = await client.health().catch(() => undefined)
