@@ -79,5 +79,30 @@ AUTO-MAS 控制台
 · mas我是谁 — 查看自己的平台标识
 
 名称支持模糊匹配，ID 支持前缀；查询类所有人可用。
-AUTO-MAS 的任务通知默认在整批任务结束后统一投递。
+首次使用：在 AUTO-MAS 通知设置中启用 Koishi 并重启，或用 mas推送 -e 写入后重启。
+`
+
+export const USAGE_MARKDOWN = `
+通过 Koishi 连接、查询和控制 AUTO-MAS，并接收它推送的通知。
+
+| 指令 | 别名 | 说明 |
+| :--- | :--- | :--- |
+| \`mas.status\` | \`mas状态\` | 后端状态、运行任务与推送状态 |
+| \`mas.task [任务ID]\` | \`mas任务\` | 任务列表；带 ID 查结果 |
+| \`mas.queue\` | \`mas队列\` | 调度队列；\`-v\` 显示完整 ID |
+| \`mas.scripts\` | \`mas脚本\` | 脚本配置；\`-v\` 显示完整 ID |
+| \`mas.users [脚本]\` | \`mas用户\` | 脚本用户；\`-v\` 显示完整 ID |
+| \`mas.history [天数]\` | \`mas历史\` | 执行历史，默认 1 天 |
+| \`mas.start [名称]\` | \`mas启动\` | 启动脚本或队列；\`-c\` 循环执行队列 |
+| \`mas.startqueue [队列] [用户...]\` | \`mas开队\` | 指定用户启动队列 |
+| \`mas.stop [任务ID]\` | \`mas停止\` | 停止任务 |
+| \`mas.power [操作] -y\` | \`mas电源\` | 关机、重启、休眠等 |
+| \`mas.screenshot [窗口]\` | \`mas截图\` | 按配置截图；\`-a\` 用 ADB |
+| \`mas.push [地址]\` | \`mas推送\` | 查看或修改推送设置；\`-e\` 启用、\`-d\` 关闭、\`-t\` 测试 |
+| \`mas.test\` | \`mas测试\` | 给聊天目标发测试通知 |
+| \`mas.whoami\` | \`mas我是谁\` | 查看自己的平台标识 |
+
+查询类指令所有人可用，控制类指令仅管理员。名称支持模糊匹配，ID 支持前缀。
+
+**接入 AUTO-MAS**：在 AUTO-MAS 的通知设置中启用 Koishi，地址填 \`ws://<Koishi 地址>:<端口>/AUTO_MAS\`，保存后重启一次 AUTO-MAS；也可以用 \`mas推送 -e\` 写入。webhook 通道与 Koishi 通道不同，webhook 指向 \`/AUTO_MAS\` 不会被本插件接收。
 `

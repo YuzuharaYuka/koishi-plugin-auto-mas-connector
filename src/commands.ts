@@ -485,8 +485,20 @@ export function registerCommands(deps: CommandDependencies): void {
           ].join('\n')
         }
         if (options?.test) {
-          await client.testNotify()
-          return '已请求 AUTO-MAS 发送测试通知，请查看聊天目标是否收到。'
+          try {
+            await client.testNotify()
+            return '已请求 AUTO-MAS 发送测试通知，请查看聊天目标是否收到。'
+          } catch (error) {
+            const message = getErrorMessage(error)
+            if (/koishi/i.test(message)) {
+              return [
+                `测试通知发送失败：${message}`,
+                'AUTO-MAS 的 Koishi 推送通道未启动。修改推送设置后需要重启一次 AUTO-MAS。',
+                '重启后仍失败时，检查 KoishiServerAddress 是否为 ws://<Koishi 地址>:<端口>/AUTO_MAS，以及该端口是否可达。',
+              ].join('\n')
+            }
+            throw error
+          }
         }
 
         const push = readPushSetting(await client.getSetting())
@@ -497,8 +509,9 @@ export function registerCommands(deps: CommandDependencies): void {
           `令牌 ${push.tokenConfigured ? '已设置' : '未设置'}`,
           `建议 ${expected}`,
         ]
-        if (!push.enabled) lines.push('启用：mas推送 -e')
+        if (!push.enabled) lines.push('启用：mas推送 -e，写入后重启 AUTO-MAS')
         else if (push.address && push.address !== expected) lines.push('当前地址与建议值不同，如有需要可重新执行 mas推送 -e')
+        else lines.push('修改设置后需重启 AUTO-MAS 才会生效')
         return lines.join('\n')
       })
     })

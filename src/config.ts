@@ -78,7 +78,7 @@ export const Config: Schema<Config> = Schema.intersect([
   Schema.object({
     baseUrl: Schema.string()
       .default(DEFAULT_BASE_URL)
-      .description('AUTO-MAS 后端地址；跨机或容器部署时填对方可达地址'),
+      .description('AUTO-MAS 后端地址；跨机填对方可达地址'),
     timeout: Schema.number()
       .min(1000)
       .max(30000)
@@ -97,10 +97,10 @@ export const Config: Schema<Config> = Schema.intersect([
       .description('AUTO-MAS 推送连接的挂载方式'),
     listenPath: Schema.string()
       .default(DEFAULT_LISTEN_PATH)
-      .description('WebSocket 路径，需与 AUTO-MAS 通知地址一致'),
+      .description('推送路径，需与 AUTO-MAS 的推送地址一致'),
     host: Schema.string()
       .default('127.0.0.1')
-      .description('独立监听地址；跨机访问填 0.0.0.0 或具体网卡地址'),
+      .description('独立监听地址；跨机访问填 0.0.0.0'),
     token: Schema.string()
       .role('secret')
       .default('')
@@ -124,7 +124,7 @@ export const Config: Schema<Config> = Schema.intersect([
       .description('转发推送中的图片'),
     mergeForward: Schema.boolean()
       .default(true)
-      .description('纯文本通知使用合并转发，图片通知直接发送'),
+      .description('文本通知使用合并转发'),
     imageWidth: Schema.number()
       .min(480)
       .max(1200)
@@ -138,7 +138,7 @@ export const Config: Schema<Config> = Schema.intersect([
     }))
       .role('table')
       .default(defaultCategories)
-      .description('**接收类别**<br>拖动排序，关闭开关即不接收'),
+      .description('**接收类别**<br>拖动排序，关闭即不接收'),
     notifyTargets: Schema.array(Schema.object({
       platform: Schema.string()
         .default('onebot')
@@ -166,7 +166,7 @@ export const Config: Schema<Config> = Schema.intersect([
     admins: Schema.array(Schema.string())
       .role('table')
       .default([])
-      .description('管理员标识，格式 `平台:用户ID`；留空时控制指令全部拒绝'),
+      .description('管理员标识，格式 `平台:用户ID`；留空时控制指令不可用'),
   }).description('权限'),
 
   Schema.object({
@@ -185,13 +185,13 @@ export const Config: Schema<Config> = Schema.intersect([
       .description('截图方式'),
     gameWindow: Schema.string()
       .default(DEFAULT_GAME_WINDOW)
-      .description('窗口标题关键字，匹配可见窗口'),
+      .description('窗口标题关键字'),
     adbPath: Schema.string()
       .default('')
-      .description('adb 路径；留空时从模拟器配置自动识别'),
+      .description('adb 路径；留空自动识别'),
     adbSerial: Schema.string()
       .default('')
-      .description('设备序列号；留空时取运行中模拟器的 adb 地址'),
+      .description('设备序列号；留空自动识别'),
   }).description('截图'),
 
   Schema.object({
