@@ -188,10 +188,10 @@ export const Config: Schema<Config> = Schema.intersect([
       .description('窗口标题关键字，匹配可见窗口'),
     adbPath: Schema.string()
       .default('')
-      .description('adb 路径，如 `D:/mumu/MuMuPlayer/nx_main/adb.exe`'),
+      .description('adb 路径；留空时从模拟器配置自动识别'),
     adbSerial: Schema.string()
       .default('')
-      .description('设备序列号，如 `127.0.0.1:16384`'),
+      .description('设备序列号；留空时取运行中模拟器的 adb 地址'),
   }).description('截图'),
 
   Schema.object({

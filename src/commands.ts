@@ -1,7 +1,7 @@
 import { h, type Context, type Element, type Session } from 'koishi'
 import type { AutoMasClient } from './client'
 import type { Config } from './config'
-import { HELP_TEXT, POWER_ALIASES, POWER_SIGNALS } from './constants'
+import { DEFAULT_LISTEN_PATH, HELP_TEXT, POWER_ALIASES, POWER_SIGNALS } from './constants'
 import {
   findQueue,
   findScript,
@@ -14,15 +14,18 @@ import {
   formatTaskList,
   formatTaskStatus,
   formatUserList,
+  matchUsers,
   queueScriptIds,
   normalizeSearch,
+  readPushSetting,
+  resolveAdbTarget,
   scriptEntries,
   scriptName,
   suggestNames,
 } from './handlers'
 import type { Notifier } from './notify'
 import type { ScriptsGetOut } from './types'
-import { clampNumber, formatDate, getErrorMessage, logger, parseIdentity } from './utils'
+import { clampNumber, expectedPushAddress, formatDate, getErrorMessage, logger, parseIdentity } from './utils'
 
 export interface CommandDependencies {
   ctx: Context
@@ -56,6 +59,8 @@ interface UserResolution {
   skipped: string[]
   /** 一个脚本都没匹配上的用户名 */
   unmatched: string[]
+  /** 在某个脚本里匹配到多个用户、无法确定的用户名 */
+  ambiguous: string[]
 }
 
 export function registerCommands(deps: CommandDependencies): void {
@@ -115,15 +120,8 @@ export function registerCommands(deps: CommandDependencies): void {
   }
 
   const matchUser = (users: ResolvedUser[], token: string): ResolvedUser | undefined => {
-    const text = token.trim()
-    if (!text) return undefined
-    const exact = users.find((user) => user.uid === text) ?? users.find((user) => user.name === text)
-    if (exact) return exact
-    const lower = text.toLowerCase()
-    const caseInsensitive = users.find((user) => user.name.toLowerCase() === lower)
-    if (caseInsensitive) return caseInsensitive
-    const partial = users.filter((user) => user.name.toLowerCase().includes(lower))
-    return partial.length === 1 ? partial[0] : undefined
+    const matched = matchUsers(users, token)
+    return matched.length === 1 ? matched[0] : undefined
   }
 
   /** 把用户名称解析成队列里每个脚本各自的用户 ID */
@@ -133,13 +131,18 @@ export function registerCommands(deps: CommandDependencies): void {
       names.set(item.uid, item.name)
     }
 
-    const resolution: UserResolution = { queueUserIds: {}, skipped: [], unmatched: [...tokens] }
+    const resolution: UserResolution = { queueUserIds: {}, skipped: [], unmatched: [...tokens], ambiguous: [] }
     for (const scriptId of scriptIds) {
       const users = await loadUsers(scriptId)
       const matched: string[] = []
       for (const token of tokens) {
-        const user = matchUser(users, token)
-        if (!user) continue
+        const candidates = matchUsers(users, token)
+        if (candidates.length > 1) {
+          if (!resolution.ambiguous.includes(token)) resolution.ambiguous.push(token)
+          continue
+        }
+        if (!candidates.length) continue
+        const user = candidates[0]
         if (!matched.includes(user.uid)) matched.push(user.uid)
         const index = resolution.unmatched.indexOf(token)
         if (index >= 0) resolution.unmatched.splice(index, 1)
@@ -155,13 +158,19 @@ export function registerCommands(deps: CommandDependencies): void {
     .action(({ session }) => (session ? HELP_TEXT : ''))
 
   alias(ctx.command('mas.status', '查看 AUTO-MAS 状态'), 'mas状态')
-    .usage('检查后端是否就绪，并列出运行中的任务与已安排的脚本数量。')
+    .usage('检查后端是否就绪，并列出运行中的任务、已安排的脚本数量与推送状态。')
     .example('mas.status')
     .action(({ session }) => {
       if (!session) return ''
       return run('mas.status', async () => {
         const [health, snapshot] = await Promise.all([client.health(), client.getRuntimeSnapshot()])
-        return formatStatus(health, snapshot)
+        let pushInfo
+        try {
+          pushInfo = readPushSetting(await client.getSetting())
+        } catch {
+          pushInfo = undefined
+        }
+        return formatStatus(health, snapshot, pushInfo)
       })
     })
 
@@ -178,26 +187,29 @@ export function registerCommands(deps: CommandDependencies): void {
     })
 
   alias(ctx.command('mas.queue', '查看调度队列'), 'mas队列')
-    .usage('列出调度队列、是否启用定时或循环，以及队列 ID。')
+    .option('verbose', '-v, --verbose 显示完整 ID')
+    .usage('列出调度队列、是否启用定时或循环，以及队列 ID；ID 默认只显示前 8 位。')
     .example('mas.queue')
-    .action(({ session }) => {
+    .action(({ session, options }) => {
       if (!session) return ''
-      return run('mas.queue', async () => formatQueueList(await client.getQueues()))
+      return run('mas.queue', async () => formatQueueList(await client.getQueues(), Boolean(options?.verbose)))
     })
 
   alias(ctx.command('mas.scripts', '查看脚本配置'), 'mas脚本')
-    .usage('列出脚本配置、所属游戏与脚本 ID。')
+    .option('verbose', '-v, --verbose 显示完整 ID')
+    .usage('列出脚本配置、所属游戏与脚本 ID；ID 默认只显示前 8 位。')
     .example('mas.scripts')
-    .action(({ session }) => {
+    .action(({ session, options }) => {
       if (!session) return ''
-      return run('mas.scripts', async () => formatScriptList(await client.getScripts()))
+      return run('mas.scripts', async () => formatScriptList(await client.getScripts(), Boolean(options?.verbose)))
     })
 
   alias(ctx.command('mas.users [script:string]', '查看脚本下的用户'), 'mas用户')
+    .option('verbose', '-v, --verbose 显示完整用户 ID')
     .usage('不带参数时列出脚本和用户数量；带脚本 ID 或名称时列出该脚本下的用户名与用户 ID。')
     .example('mas.users')
     .example('mas.users 剿灭')
-    .action(({ session }, scriptQuery) => {
+    .action(({ session, options }, scriptQuery) => {
       if (!session) return ''
       return run('mas.users', async () => {
         const scripts = await client.getScripts()
@@ -205,13 +217,13 @@ export function registerCommands(deps: CommandDependencies): void {
         if (!items.length) return 'AUTO-MAS 里还没有脚本配置。'
 
         if (!scriptQuery) {
-          const lines = ['脚本与用户数量：']
+          const lines = [`脚本与用户数量（${items.length} 个）`]
           for (const item of items) {
             const result = await client.getUsers(item.uid)
             const count = (result.index?.length ?? 0) || Object.keys(result.data ?? {}).length
-            lines.push(`- ${item.name}：${count} 个用户`)
+            lines.push(`· ${item.name} ${count} 个用户`)
           }
-          lines.push('用 mas.users 「脚本名称」 查看具体用户。')
+          lines.push('用 mas用户 [脚本] 查看具体用户。')
           return lines.join('\n')
         }
 
@@ -226,7 +238,7 @@ export function registerCommands(deps: CommandDependencies): void {
         }
         const blocks: string[] = []
         for (const item of chosen.slice(0, 3)) {
-          blocks.push(formatUserList(item.name, await client.getUsers(item.uid)))
+          blocks.push(formatUserList(item.name, await client.getUsers(item.uid), Boolean(options?.verbose)))
         }
         return blocks.join('\n\n')
       })
@@ -316,10 +328,16 @@ export function registerCommands(deps: CommandDependencies): void {
         }
 
         const resolution = await resolveQueueUsers(scriptIds, scripts, tokens)
+        if (resolution.ambiguous.length) {
+          return [
+            `这些用户名在脚本里匹配到多个用户，请写得更具体：${resolution.ambiguous.join('、')}。`,
+            '可用 mas用户 [脚本] 查看用户名与 ID。',
+          ].join('\n')
+        }
         if (resolution.unmatched.length) {
           const names = new Set<string>()
           for (const scriptId of scriptIds) {
-            for (const user of await loadUsers(scriptId)) names.add(`${user.name}（${user.uid}）`)
+            for (const user of await loadUsers(scriptId)) names.add(user.name)
           }
           const hint = suggestNames([...names], resolution.unmatched[0])
           return [
@@ -394,7 +412,7 @@ export function registerCommands(deps: CommandDependencies): void {
     })
 
   alias(ctx.command('mas.screenshot [title:text]', '截取游戏窗口'), 'mas截图')
-    .usage('按配置的截图方式执行：自动、窗口或 ADB；-a 强制使用 ADB。')
+    .usage('按配置的截图方式执行：自动、窗口或 ADB；-a 强制使用 ADB。ADB 路径或序列号留空时会自动识别。')
     .option('adb', '-a, --adb 直接使用 ADB 截图')
     .example('mas.screenshot')
     .example('mas.screenshot -a')
@@ -402,26 +420,86 @@ export function registerCommands(deps: CommandDependencies): void {
       if (!session) return ''
       if (!checkAdmin(session, 'mas.screenshot')) return ''
       return run('mas.screenshot', async () => {
-        const adbReady = Boolean(config.adbPath && config.adbSerial)
-        const mode = options?.adb ? 'adb' : config.screenshotMode
         const captureWindow = async () => {
           const result = await client.screenshot(title?.trim() || config.gameWindow)
           return screenshotImage(result, 'AUTO-MAS 没有返回图片，请确认游戏窗口标题是否正确。')
         }
-        const captureAdb = async () => {
-          if (!adbReady) return '还没有配置 adb 路径与设备序列号，请在「截图」分组里填写。'
-          const result = await client.screenshotAdb(config.adbPath, config.adbSerial)
+        const captureAdb = async (): Promise<string | Element> => {
+          const target = await resolveAdbTarget(client, config)
+          if (!target.adbPath || !target.serial) {
+            const hint = target.notes.length ? `\n${target.notes.join('\n')}` : ''
+            throw new Error(`没有找到可用的 ADB：先启动模拟器，或在「截图」分组填写 adb 路径与设备序列号。${hint}`)
+          }
+          const result = await client.screenshotAdb(target.adbPath, target.serial)
           return screenshotImage(result, 'ADB 没有返回图片，请确认设备序列号是否正确。')
         }
+        const mode = options?.adb ? 'adb' : config.screenshotMode
         if (mode === 'adb') return captureAdb()
         if (mode === 'window') return captureWindow()
         try {
           return await captureWindow()
-        } catch (error) {
-          if (!adbReady) throw error
-          logger.debug(`[截图] 窗口截图失败，改用 ADB: ${getErrorMessage(error)}`)
-          return captureAdb()
+        } catch (windowError) {
+          logger.debug(`[截图] 窗口截图失败，改用 ADB: ${getErrorMessage(windowError)}`)
+          try {
+            return await captureAdb()
+          } catch (adbError) {
+            return `窗口截图失败：${getErrorMessage(windowError)}\nADB 截图失败：${getErrorMessage(adbError)}`
+          }
         }
+      })
+    })
+
+  alias(ctx.command('mas.push [address:string]', 'AUTO-MAS 推送设置'), 'mas推送')
+    .option('enable', '-e, --enable 启用 AUTO-MAS 的 Koishi 推送')
+    .option('disable', '-d, --disable 关闭 AUTO-MAS 的 Koishi 推送')
+    .option('test', '-t, --test 让 AUTO-MAS 发一条测试通知')
+    .usage(
+      '查看或修改 AUTO-MAS 的 Koishi 推送设置。\n' +
+      '启用时默认使用 ws://127.0.0.1:5140' + DEFAULT_LISTEN_PATH + '，也可在参数里写完整地址；令牌跟随插件配置。\n' +
+      'AUTO-MAS 只在启动时初始化推送通道，修改后需要重启一次。',
+    )
+    .example('mas.push')
+    .example('mas.push -e')
+    .example('mas.push ws://192.168.5.20:5140/AUTO_MAS -e')
+    .action(({ session, options }, address) => {
+      if (!session) return ''
+      if (!checkAdmin(session, 'mas.push')) return ''
+      return run('mas.push', async () => {
+        if (options?.disable) {
+          await client.updateNotifySetting({ IfKoishiSupport: false })
+          return '已关闭 AUTO-MAS 的 Koishi 推送。'
+        }
+        if (options?.enable) {
+          const target = String(address ?? '').trim() || expectedPushAddress(config)
+          await client.updateNotifySetting({
+            IfKoishiSupport: true,
+            KoishiServerAddress: target,
+            KoishiToken: config.token,
+          })
+          return [
+            '已启用 AUTO-MAS 的 Koishi 推送。',
+            `地址 ${target}`,
+            `令牌 ${config.token ? '与插件一致' : '未设置'}`,
+            '设置已写入；需要重启一次 AUTO-MAS 才会启动推送通道。',
+            '重启后可用 mas推送 -t 验证。',
+          ].join('\n')
+        }
+        if (options?.test) {
+          await client.testNotify()
+          return '已请求 AUTO-MAS 发送测试通知，请查看聊天目标是否收到。'
+        }
+
+        const push = readPushSetting(await client.getSetting())
+        const expected = expectedPushAddress(config)
+        const lines = [
+          `推送 ${push.enabled ? '已启用' : '未启用'}`,
+          `地址 ${push.address || '未设置'}`,
+          `令牌 ${push.tokenConfigured ? '已设置' : '未设置'}`,
+          `建议 ${expected}`,
+        ]
+        if (!push.enabled) lines.push('启用：mas推送 -e')
+        else if (push.address && push.address !== expected) lines.push('当前地址与建议值不同，如有需要可重新执行 mas推送 -e')
+        return lines.join('\n')
       })
     })
 

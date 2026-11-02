@@ -149,17 +149,23 @@ export class Notifier {
     const message = `AUTO-MAS 测试通知\n时间：${new Date().toLocaleString('zh-CN', { hour12: false })}\n收到这条消息说明 Koishi 到聊天平台的链路正常。`
     const lines: string[] = []
     for (const target of this.config.notifyTargets) {
-      const bot = this.findBot(target.platform)
-      if (!bot) {
-        lines.push(`- ${describeTarget(target)}：找不到平台机器人`)
+      const bots = this.activeBots(target.platform)
+      if (!bots.length) {
+        lines.push(`- ${describeTarget(target)}：平台机器人未连接`)
         continue
       }
-      try {
-        await this.sendTo(bot, target, message)
-        lines.push(`- ${describeTarget(target)}：已发送`)
-      } catch (error) {
-        lines.push(`- ${describeTarget(target)}：失败（${getErrorMessage(error)}）`)
+      let sent = false
+      let lastError = ''
+      for (const bot of bots) {
+        try {
+          await this.sendTo(bot, target, message)
+          sent = true
+          break
+        } catch (error) {
+          lastError = getErrorMessage(error)
+        }
       }
+      lines.push(`- ${describeTarget(target)}：${sent ? '已发送' : `失败（${describeError(lastError)}）`}`)
     }
     return ['测试通知已处理：', ...lines].join('\n')
   }
@@ -177,26 +183,31 @@ export class Notifier {
   }
 
   private async deliver(target: NotifyTarget, rendered: RenderedNotification): Promise<void> {
-    const bot = this.findBot(target.platform)
-    if (!bot) {
-      logger.warn(`找不到平台 ${target.platform} 的机器人，通知未发送。`)
+    const bots = this.activeBots(target.platform)
+    if (!bots.length) {
+      logger.warn(`平台 ${target.platform} 的机器人未连接，通知未发送；请等平台重连后再试。`)
       return
     }
 
-    try {
-      if (rendered.image) {
-        await this.sendTo(bot, target, h.image(rendered.image, 'image/png'))
-      } else if (this.config.mergeForward) {
-        await this.sendTo(bot, target, buildForwardMessage(bot, splitMessage(rendered.text)))
-      } else {
-        for (const chunk of splitMessage(rendered.text)) {
-          await this.sendTo(bot, target, chunk)
+    let lastError = ''
+    for (const bot of bots) {
+      try {
+        if (rendered.image) {
+          await this.sendTo(bot, target, h.image(rendered.image, 'image/png'))
+        } else if (this.config.mergeForward) {
+          await this.sendTo(bot, target, buildForwardMessage(bot, splitMessage(rendered.text)))
+        } else {
+          for (const chunk of splitMessage(rendered.text)) {
+            await this.sendTo(bot, target, chunk)
+          }
         }
+        debugLog(this.config.debug, 'notify', `已发送到 ${describeTarget(target)}`)
+        return
+      } catch (error) {
+        lastError = getErrorMessage(error)
       }
-      debugLog(this.config.debug, 'notify', `已发送到 ${describeTarget(target)}`)
-    } catch (error) {
-      logger.warn(`发送通知到 ${describeTarget(target)} 失败: ${getErrorMessage(error)}`)
     }
+    logger.warn(`发送通知到 ${describeTarget(target)} 失败: ${describeError(lastError)}`)
   }
 
   private async sendTo(bot: Bot, target: NotifyTarget, content: string | Element): Promise<void> {
@@ -207,10 +218,17 @@ export class Notifier {
     await bot.sendMessage(target.channelId, content)
   }
 
-  private findBot(platform: string): Bot | undefined {
-    const bots = this.ctx.bots as Bot[]
-    return bots.find((bot) => bot.platform === platform) ?? (platform ? undefined : bots[0])
+  private activeBots(platform: string): Bot[] {
+    return (this.ctx.bots as Bot[]).filter((bot) => bot.platform === platform && bot.isActive)
   }
+}
+
+/** 把常见的连接断开错误换成用户能理解的提示 */
+function describeError(message: string): string {
+  if (/connection has closed|websocket.*closed|ECONNRESET/i.test(message)) {
+    return '平台机器人连接已断开，请检查 OneBot/NapCat 与 QQ 是否在线'
+  }
+  return message || '未知错误'
 }
 
 function describeTarget(target: NotifyTarget): string {

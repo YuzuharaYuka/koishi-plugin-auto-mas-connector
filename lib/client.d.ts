@@ -1,5 +1,5 @@
 import type { Config } from './config';
-import type { CoreHealth, HistoryDetail, HistorySearchOut, PowerCountdownSnapshot, QueueGetOut, QueueItemGetOut, ScreenshotOut, ScriptsGetOut, SettingGetOut, TaskRuntimeSnapshot, TaskStatus, UserGetOut } from './types';
+import type { CoreHealth, EmulatorGetOut, EmulatorStatusOut, HistoryDetail, HistorySearchOut, PowerCountdownSnapshot, QueueGetOut, QueueItemGetOut, ScreenshotOut, ScriptsGetOut, SettingGetOut, TaskRuntimeSnapshot, TaskStatus, UserGetOut } from './types';
 export declare class AutoMasError extends Error {
     readonly status?: number | undefined;
     readonly body?: string | undefined;
@@ -31,6 +31,12 @@ export declare class AutoMasClient {
     getScripts(): Promise<ScriptsGetOut>;
     getUsers(scriptId: string, userId?: string): Promise<UserGetOut>;
     getSetting(): Promise<SettingGetOut>;
+    /** 更新 AUTO-MAS 的通知设置；AUTO-MAS 会对传入的片段做合并 */
+    updateNotifySetting(patch: Record<string, unknown>): Promise<unknown>;
+    /** 让 AUTO-MAS 用它已启用的通知渠道发一条测试通知 */
+    testNotify(): Promise<unknown>;
+    getEmulators(): Promise<EmulatorGetOut>;
+    getEmulatorStatus(): Promise<EmulatorStatusOut>;
     searchHistory(mode: 'DAILY' | 'WEEKLY' | 'MONTHLY', startDate: string, endDate: string): Promise<HistorySearchOut>;
     getHistoryDetail(recordId: string): Promise<HistoryDetail>;
     screenshot(windowTitle: string): Promise<ScreenshotOut>;

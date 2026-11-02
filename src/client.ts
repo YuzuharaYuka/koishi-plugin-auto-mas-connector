@@ -1,6 +1,8 @@
 import type { Config } from './config'
 import type {
   CoreHealth,
+  EmulatorGetOut,
+  EmulatorStatusOut,
   HistoryDetail,
   HistorySearchOut,
   PowerCountdownSnapshot,
@@ -142,6 +144,24 @@ export class AutoMasClient {
 
   getSetting(): Promise<SettingGetOut> {
     return this.request<SettingGetOut>('/api/setting/get', { method: 'POST', body: {} })
+  }
+
+  /** 更新 AUTO-MAS 的通知设置；AUTO-MAS 会对传入的片段做合并 */
+  updateNotifySetting(patch: Record<string, unknown>): Promise<unknown> {
+    return this.request('/api/setting/update', { method: 'POST', body: { data: { Notify: patch } } })
+  }
+
+  /** 让 AUTO-MAS 用它已启用的通知渠道发一条测试通知 */
+  testNotify(): Promise<unknown> {
+    return this.request('/api/setting/test_notify', { method: 'POST', body: {} })
+  }
+
+  getEmulators(): Promise<EmulatorGetOut> {
+    return this.request<EmulatorGetOut>('/api/emulator/get', { method: 'POST', body: {} })
+  }
+
+  getEmulatorStatus(): Promise<EmulatorStatusOut> {
+    return this.request<EmulatorStatusOut>('/api/emulator/status', { method: 'POST', body: {} })
   }
 
   searchHistory(mode: 'DAILY' | 'WEEKLY' | 'MONTHLY', startDate: string, endDate: string): Promise<HistorySearchOut> {

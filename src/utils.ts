@@ -1,5 +1,5 @@
 import { Logger } from 'koishi'
-import { LOGGER_NAME, MAX_MESSAGE_LENGTH } from './constants'
+import { DEFAULT_KOISHI_PORT, LOGGER_NAME, MAX_MESSAGE_LENGTH } from './constants'
 
 export const logger = new Logger(LOGGER_NAME)
 
@@ -58,6 +58,20 @@ export function formatDate(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+/** 推断 AUTO-MAS 应该填写的推送地址：复用 Koishi 服务时默认 5140 */
+export function expectedPushAddress(config: {
+  listenMode: string
+  listenPath: string
+  host: string
+  port: number
+}): string {
+  const port = config.listenMode === 'standalone' ? config.port : DEFAULT_KOISHI_PORT
+  const host = config.listenMode === 'standalone'
+    ? (config.host === '0.0.0.0' ? '127.0.0.1' : config.host)
+    : '127.0.0.1'
+  return `ws://${host}:${port}${config.listenPath}`
 }
 
 /** AUTO-MAS 的 HTML 正文转纯文本，保留换行与表格分隔 */

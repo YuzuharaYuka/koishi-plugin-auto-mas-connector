@@ -13,5 +13,12 @@ export declare function normalizeListenPath(value: string): string;
 /** 解析 `平台:用户ID`；用户 ID 里出现冒号时按第一个冒号切分 */
 export declare function parseIdentity(value: string): Identity | undefined;
 export declare function formatDate(date: Date): string;
+/** 推断 AUTO-MAS 应该填写的推送地址：复用 Koishi 服务时默认 5140 */
+export declare function expectedPushAddress(config: {
+    listenMode: string;
+    listenPath: string;
+    host: string;
+    port: number;
+}): string;
 /** AUTO-MAS 的 HTML 正文转纯文本，保留换行与表格分隔 */
 export declare function htmlToText(input: string): string;

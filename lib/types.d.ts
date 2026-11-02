@@ -151,8 +151,35 @@ export interface ScreenshotOut {
     image_width?: number;
     image_height?: number;
 }
+export interface EmulatorInfo {
+    Name?: string;
+    Type?: string;
+    Path?: string;
+    [key: string]: unknown;
+}
+export interface EmulatorGetOut {
+    index?: Array<{
+        uid: string;
+        type?: string;
+    }>;
+    data?: Record<string, {
+        Info?: EmulatorInfo;
+    }>;
+}
+export interface EmulatorStatusDevice {
+    title?: string;
+    status?: number;
+    adb_address?: string;
+    [key: string]: unknown;
+}
+export interface EmulatorStatusOut {
+    data?: Record<string, Record<string, EmulatorStatusDevice>>;
+}
 export interface SettingGetOut {
-    Notify?: Record<string, unknown>;
+    data?: {
+        Notify?: Record<string, unknown>;
+        [key: string]: unknown;
+    };
     [key: string]: unknown;
 }
 export interface PushPayload {

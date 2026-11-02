@@ -29,7 +29,7 @@ export declare class Notifier {
     private acceptTarget;
     private deliver;
     private sendTo;
-    private findBot;
+    private activeBots;
 }
 /** 给调试日志用的类别说明 */
 export declare function describeCategories(categories: string[]): string;
