@@ -31,6 +31,12 @@ export interface Config {
     host: string;
     /** 独立监听端口 */
     port: number;
+    /** 允许通过指令控制 AUTO-MAS 进程 */
+    processControl: boolean;
+    /** AUTO-MAS 启动文件路径 */
+    masExePath: string;
+    /** 等待进程启动/关闭的秒数 */
+    processTimeout: number;
     notifyEnabled: boolean;
     notifyTargets: NotifyTarget[];
     /** 全局接收类别 */

@@ -13,8 +13,10 @@ export declare class AutoMasClient {
     request<T>(path: string, init?: {
         method?: string;
         body?: unknown;
+        silent?: boolean;
     }): Promise<T>;
-    health(): Promise<CoreHealth>;
+    health(silent?: boolean): Promise<CoreHealth>;
+    close(): Promise<void>;
     getRuntimeSnapshot(): Promise<TaskRuntimeSnapshot>;
     getTask(taskId: string): Promise<TaskStatus>;
     startTask(taskId: string, mode: 'AutoProxy' | 'ScriptConfig' | 'Update' | 'CycleRun'): Promise<{

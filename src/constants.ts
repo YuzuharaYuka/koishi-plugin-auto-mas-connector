@@ -8,6 +8,7 @@ export const DEFAULT_IMAGE_WIDTH = 720
 export const MAX_MESSAGE_LENGTH = 2000
 /** Koishi 默认的 HTTP 端口，用于推断 AUTO-MAS 应填写的推送地址 */
 export const DEFAULT_KOISHI_PORT = 5140
+export const DEFAULT_PROCESS_TIMEOUT = 60
 
 /** 通知类别：AUTO-MAS 的推送没有结构化分类，只能按正文关键词归类 */
 export const NOTIFICATION_CATEGORIES: Record<string, string> = {
@@ -70,7 +71,8 @@ AUTO-MAS 控制台
 · mas启动 [名称] — 启动脚本或队列；-c 循环执行队列
 · mas开队 [队列] [用户...] — 指定用户启动队列
 · mas停止 [任务ID] — 停止任务
-· mas电源 [操作] -y — 关机、重启、休眠等
+· mas电源 [操作] -y — 任务结束后关机、重启、休眠等
+· mas进程 [操作] -y — 查看、关闭、启动、重启 AUTO-MAS 进程
 · mas截图 [窗口] [-a] — 按配置截图；-a 用 ADB
 
 其他
@@ -78,12 +80,12 @@ AUTO-MAS 控制台
 · mas推送 [-e|-d|-t] — 查看或修改 AUTO-MAS 推送设置
 · mas我是谁 — 查看自己的平台标识
 
-名称支持模糊匹配，ID 支持前缀；查询类所有人可用。
-首次使用：在 AUTO-MAS 通知设置中启用 Koishi 并重启，或用 mas推送 -e 写入后重启。
+名称支持模糊匹配，ID 支持前缀；查询类所有人可用
+首次使用：在 AUTO-MAS 通知设置中启用 Koishi 并重启，或用 mas推送 -e 写入后重启
 `
 
 export const USAGE_MARKDOWN = `
-通过 Koishi 连接、查询和控制 AUTO-MAS，并接收它推送的通知。
+通过 Koishi 连接、查询和控制 AUTO-MAS，并接收它推送的通知
 
 | 指令 | 别名 | 说明 |
 | :--- | :--- | :--- |
@@ -96,13 +98,14 @@ export const USAGE_MARKDOWN = `
 | \`mas.start [名称]\` | \`mas启动\` | 启动脚本或队列；\`-c\` 循环执行队列 |
 | \`mas.startqueue [队列] [用户...]\` | \`mas开队\` | 指定用户启动队列 |
 | \`mas.stop [任务ID]\` | \`mas停止\` | 停止任务 |
-| \`mas.power [操作] -y\` | \`mas电源\` | 关机、重启、休眠等 |
+| \`mas.power [操作] -y\` | \`mas电源\` | 任务结束后控制电脑关机、重启、休眠 |
+| \`mas.process [操作] -y\` | \`mas进程\` | 查看、关闭、启动或重启 AUTO-MAS 进程 |
 | \`mas.screenshot [窗口]\` | \`mas截图\` | 按配置截图；\`-a\` 用 ADB |
 | \`mas.push [地址]\` | \`mas推送\` | 查看或修改推送设置；\`-e\` 启用、\`-d\` 关闭、\`-t\` 测试 |
 | \`mas.test\` | \`mas测试\` | 给聊天目标发测试通知 |
 | \`mas.whoami\` | \`mas我是谁\` | 查看自己的平台标识 |
 
-查询类指令所有人可用，控制类指令仅管理员。名称支持模糊匹配，ID 支持前缀。
+查询类指令所有人可用，控制类指令仅管理员。名称支持模糊匹配，ID 支持前缀
 
 **接入 AUTO-MAS**：在 AUTO-MAS 的通知设置中启用 Koishi，地址填 \`ws://<Koishi 地址>:<端口>/AUTO_MAS\`，保存后重启一次 AUTO-MAS；也可以用 \`mas推送 -e\` 写入。webhook 通道与 Koishi 通道不同，webhook 指向 \`/AUTO_MAS\` 不会被本插件接收。
 `

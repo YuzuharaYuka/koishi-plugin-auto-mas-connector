@@ -9,6 +9,7 @@
 - 接收推送并按类别转发到群聊或私聊
 - HTML 推送转图片，文本推送合并转发
 - 窗口截图，失败时可回退 ADB
+- 关闭、启动或重启 AUTO-MAS（同机关闭窗口与后端，跨机只能关闭后端）
 
 ## 配置
 
@@ -24,6 +25,9 @@
 | `mergeForward` | 文本通知使用合并转发，图片直接发送 |
 | `screenshotMode` | 截图方式：自动、窗口、ADB |
 | `adbPath` / `adbSerial` | adb 路径与序列号，留空自动识别 |
+| `processControl` | 允许通过指令控制 AUTO-MAS 进程，默认关闭 |
+| `masExePath` | AUTO-MAS 启动文件路径，留空自动识别 |
+| `processTimeout` | 等待进程启动或关闭的秒数，默认 60 |
 
 ## 接入 AUTO-MAS
 
@@ -64,7 +68,8 @@ webhook 与 Koishi 是两种通道：指向 `/AUTO_MAS` 的 HTTP POST 属于 web
 | `mas.start [名称]` | `mas启动` | 启动脚本或队列；`-c` 循环执行队列 |
 | `mas.startqueue [队列] [用户...]` | `mas开队` | 指定用户启动队列 |
 | `mas.stop [任务ID]` | `mas停止` | 停止任务 |
-| `mas.power [操作] -y` | `mas电源` | 关机、重启、休眠等 |
+| `mas.power [操作] -y` | `mas电源` | 任务结束后关机、重启、休眠等 |
+| `mas.process [操作] -y` | `mas进程` | 查看、关闭、启动或重启 AUTO-MAS；同机关闭整个程序 |
 | `mas.screenshot [窗口]` | `mas截图` | 按配置截图；`-a` 用 ADB |
 | `mas.push [地址]` | `mas推送` | 查看或修改推送设置；`-e` 启用、`-d` 关闭、`-t` 测试 |
 | `mas.test` | `mas测试` | 给聊天目标发测试通知 |

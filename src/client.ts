@@ -32,10 +32,13 @@ export class AutoMasClient {
   }
 
   /** 发送请求并拆掉 AUTO-MAS 的 { success, data } 信封；失败时抛出带下一步提示的错误 */
-  async request<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
+  async request<T>(
+    path: string,
+    init: { method?: string; body?: unknown; silent?: boolean } = {},
+  ): Promise<T> {
     const method = init.method ?? 'GET'
     const started = Date.now()
-    debugLog(this.config.debug, 'client', `请求 ${method} ${path}`)
+    if (!init.silent) debugLog(this.config.debug, 'client', `请求 ${method} ${path}`)
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (init.body !== undefined) headers['Content-Type'] = 'application/json'
 
@@ -51,7 +54,7 @@ export class AutoMasClient {
       const message = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
         ? `请求超时（${this.config.timeout} 毫秒）：${this.config.baseUrl}${path}`
         : `无法连接 AUTO-MAS（${this.config.baseUrl}）：${getErrorMessage(error)}`
-      logger.warn(`[请求] ${method} ${path} 失败：${message}`)
+      if (!init.silent) logger.warn(`[请求] ${method} ${path} 失败：${message}`)
       throw new AutoMasError(message)
     }
 
@@ -66,7 +69,7 @@ export class AutoMasClient {
     if (!response.ok) {
       const message = readMessage(payload) ?? text.slice(0, 200)
       const detail = `AUTO-MAS 返回 HTTP ${response.status}${message ? `：${message}` : ''}`
-      logger.warn(`[请求] ${method} ${path} 失败：${detail}`)
+      if (!init.silent) logger.warn(`[请求] ${method} ${path} 失败：${detail}`)
       throw new AutoMasError(detail, response.status, text.slice(0, 500))
     }
 
@@ -77,7 +80,7 @@ export class AutoMasClient {
           const message = readMessage(payload) ?? '未提供原因'
           throw new AutoMasError(`AUTO-MAS 拒绝了该操作：${message}`)
         }
-        debugLog(this.config.debug, 'client', `${method} ${path} -> success，用时 ${Date.now() - started}ms`)
+        if (!init.silent) debugLog(this.config.debug, 'client', `${method} ${path} -> success，用时 ${Date.now() - started}ms`)
         return record.data as T
       }
       if (typeof record.code === 'number' && record.code >= 400) {
@@ -86,12 +89,16 @@ export class AutoMasClient {
       }
     }
 
-    debugLog(this.config.debug, 'client', `${method} ${path} -> ok，用时 ${Date.now() - started}ms`)
+    if (!init.silent) debugLog(this.config.debug, 'client', `${method} ${path} -> ok，用时 ${Date.now() - started}ms`)
     return payload as T
   }
 
-  health(): Promise<CoreHealth> {
-    return this.request<CoreHealth>('/api/core/health')
+  health(silent = false): Promise<CoreHealth> {
+    return this.request<CoreHealth>('/api/core/health', { silent })
+  }
+
+  close(): Promise<void> {
+    return this.request('/api/core/close', { method: 'POST', body: {} })
   }
 
   getRuntimeSnapshot(): Promise<TaskRuntimeSnapshot> {

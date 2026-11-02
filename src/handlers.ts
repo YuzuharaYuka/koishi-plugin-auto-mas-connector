@@ -59,9 +59,10 @@ export function formatStatus(
     lines.push(push.enabled ? `推送 已启用 · ${push.address || '地址未设置'}` : '推送 未启用')
   }
   if (!tasks.length) {
-    lines.push('当前没有运行中的任务。')
+    lines.push('', '当前没有运行中的任务')
     return lines.join('\n')
   }
+  lines.push('', `运行中的任务 ${tasks.length}`)
   for (const task of tasks.slice(0, 8)) lines.push(`· ${describeTask(task)}`)
   if (tasks.length > 8) lines.push(`另有 ${tasks.length - 8} 个任务`)
   return lines.join('\n')
@@ -69,7 +70,7 @@ export function formatStatus(
 
 export function formatTaskList(snapshot: TaskRuntimeSnapshot): string {
   const tasks = snapshot.tasks ?? []
-  if (!tasks.length) return '当前没有运行中的任务。'
+  if (!tasks.length) return '当前没有运行中的任务'
   return [`运行中的任务 ${tasks.length}`, ...tasks.map((task) => `· ${describeTask(task)}`)].join('\n')
 }
 
@@ -88,7 +89,7 @@ export function formatTaskStatus(task: TaskStatus): string {
 
 export function formatQueueList(result: QueueGetOut, verbose = false): string {
   const index = result.index ?? []
-  if (!index.length) return '当前没有调度队列。'
+  if (!index.length) return '当前没有调度队列'
   const lines = [`调度队列 ${index.length} 个`]
   for (const item of index) {
     const info = result.data?.[item.uid]?.Info ?? {}
@@ -99,13 +100,13 @@ export function formatQueueList(result: QueueGetOut, verbose = false): string {
     const id = verbose ? item.uid : shortId(item.uid)
     lines.push(`· ${name} ${id}${flags.length ? `（${flags.join(' · ')}）` : ''}`)
   }
-  lines.push('用 mas启动 [名称或 ID 前缀] 启动。')
+  lines.push('', '用 mas启动 [名称或 ID 前缀] 启动')
   return lines.join('\n')
 }
 
 export function formatScriptList(result: ScriptsGetOut, verbose = false): string {
   const index = result.index ?? []
-  if (!index.length) return '当前没有脚本配置。'
+  if (!index.length) return '当前没有脚本配置'
   const lines = [`脚本 ${index.length} 个`]
   for (const item of index) {
     const config = result.data?.[item.uid]
@@ -113,7 +114,7 @@ export function formatScriptList(result: ScriptsGetOut, verbose = false): string
     const id = verbose ? item.uid : shortId(item.uid)
     lines.push(`· ${name} ${id}`)
   }
-  lines.push('用 mas启动 [名称或 ID 前缀] 启动脚本自动代理。')
+  lines.push('', '用 mas启动 [名称或 ID 前缀] 启动脚本自动代理')
   return lines.join('\n')
 }
 
@@ -216,16 +217,16 @@ export function queueScriptIds(result: QueueItemGetOut): string[] {
 }
 
 export function formatPower(snapshot: PowerCountdownSnapshot): string {
-  if (!snapshot.active) return '当前没有待执行的电源操作。'
+  if (!snapshot.active) return '当前没有待执行的电源操作'
   const action = snapshot.operation ?? '未知操作'
   const remaining = typeof snapshot.remaining === 'number' ? `${snapshot.remaining} 秒` : '未知'
-  return `待执行电源操作 ${action}，剩余 ${remaining}。`
+  return `待执行电源操作 ${action} · 剩余 ${remaining}`
 }
 
 export function formatHistory(result: HistorySearchOut): string {
   const data = result.data ?? {}
   const dates = Object.keys(data).sort().reverse()
-  if (!dates.length) return '所选范围内没有执行历史。'
+  if (!dates.length) return '所选范围内没有执行历史'
   const lines: string[] = []
   for (const date of dates.slice(0, 7)) {
     lines.push(date)
@@ -271,13 +272,13 @@ function describeHistoryRecord(record: { time?: string; date?: string; status?: 
 /** 列出脚本下的用户；只展示名称与用户 ID，不带账号等隐私字段 */
 export function formatUserList(scriptName: string, result: UserGetOut, verbose = false): string {
   const index = result.index ?? []
-  if (!index.length) return `脚本「${scriptName}」下还没有用户。`
+  if (!index.length) return `脚本「${scriptName}」下还没有用户`
   const lines = [`脚本「${scriptName}」的用户 ${index.length} 个`]
   for (const item of index) {
     const name = result.data?.[item.uid]?.Info?.Name ?? '未命名'
     lines.push(`· ${name} ${verbose ? item.uid : shortId(item.uid)}`)
   }
-  lines.push('mas开队 时可以直接写用户名。')
+  lines.push('', 'mas开队 时可以直接写用户名')
   return lines.join('\n')
 }
 
@@ -291,7 +292,7 @@ export function suggestNames(names: string[], query: string, limit = 5): string 
 
 export function formatRunningTasks(snapshot: TaskRuntimeSnapshot): string {
   const tasks = snapshot.tasks ?? []
-  if (!tasks.length) return '当前没有运行中的任务，不需要停止。'
+  if (!tasks.length) return '当前没有运行中的任务，不需要停止'
   return [`运行中的任务 ${tasks.length}`, ...tasks.map((task) => `· ${describeTask(task)}`)].join('\n')
 }
 

@@ -1,3 +1,6 @@
+import { spawn, spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { h, type Context, type Element, type Session } from 'koishi'
 import type { AutoMasClient } from './client'
 import type { Config } from './config'
@@ -43,7 +46,7 @@ function queueEntries(result: { index?: Array<{ uid: string }>; data?: Record<st
 function screenshotImage(result: { image_base64?: string } | undefined, emptyText: string): string | Element {
   if (!result?.image_base64) return emptyText
   const buffer = Buffer.from(result.image_base64, 'base64')
-  if (!buffer.length) return 'AUTO-MAS 返回的图片为空，请稍后重试。'
+  if (!buffer.length) return 'AUTO-MAS 返回的图片为空，请稍后重试'
   return h.image(buffer, 'image/png')
 }
 
@@ -81,7 +84,7 @@ export function registerCommands(deps: CommandDependencies): void {
       return true
     }
     logger.warn(`[权限] ${session.platform}:${session.userId} 尝试使用 ${label}。`)
-    void session.send(`该指令仅管理员可用；把 ${session.platform}:${session.userId} 加入管理员配置后即可使用。`)
+    void session.send(`该指令仅管理员可用\n把 ${session.platform}:${session.userId} 加入管理员配置后即可使用`)
     return false
   }
 
@@ -98,6 +101,129 @@ export function registerCommands(deps: CommandDependencies): void {
       logger.warn(`[指令] ${label} 失败: ${message}`)
       return `操作失败：${describeFailure(message)}`
     }
+  }
+
+  const MAS_IMAGES = ['AUTO-MAS.exe', 'auto-mas-runtime.exe']
+
+  /** 统计本机同名进程数量 */
+  const countProcess = (image: string): number => {
+    const result = spawnSync('tasklist', ['/FI', `IMAGENAME eq ${image}`, '/FO', 'CSV', '/NH'], { windowsHide: true, encoding: 'utf8' })
+    const text = String(result.stdout ?? '')
+    return text.split(/\r?\n/).filter((line) => line.toLowerCase().includes(image.toLowerCase())).length
+  }
+
+  /** 关掉窗口与运行器；后端已由 /close 正常退出 */
+  const killMasProcesses = (): void => {
+    for (const image of MAS_IMAGES) {
+      spawnSync('taskkill', ['/IM', image, '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    }
+  }
+
+  const waitForProcessExit = async (seconds: number): Promise<boolean> => {
+    const deadline = Date.now() + seconds * 1000
+    do {
+      if (MAS_IMAGES.every((image) => countProcess(image) === 0)) return true
+      await new Promise((resolve) => setTimeout(resolve, 500))
+    } while (Date.now() < deadline)
+    return false
+  }
+
+  /** 判断 baseUrl 是否指向本机：启动/重启进程只能同机执行 */
+  const isLocalBaseUrl = (baseUrl: string): boolean => {
+    try {
+      const host = new URL(baseUrl).hostname.toLowerCase()
+      return ['127.0.0.1', 'localhost', '::1', '[::1]', '0.0.0.0'].includes(host)
+    } catch {
+      return false
+    }
+  }
+
+  const waitForHealth = async (wantReady: boolean, seconds: number): Promise<boolean> => {
+    const deadline = Date.now() + seconds * 1000
+    let interval = 1000
+    let lastNote = 0
+    for (;;) {
+      const health = await client.health(true).catch(() => undefined)
+      if (wantReady ? health?.ready : !health?.ready) return true
+      const elapsed = Math.round((Date.now() - (deadline - seconds * 1000)) / 1000)
+      if (elapsed >= lastNote + 5) {
+        lastNote = elapsed
+        trace('wait', `等待${wantReady ? '就绪' : '关闭'}，已等待 ${elapsed}s`)
+      }
+      if (Date.now() + interval >= deadline) return false
+      await new Promise((resolve) => setTimeout(resolve, interval))
+      interval = Math.min(interval * 2, 5000)
+    }
+  }
+
+  let cachedExePath: string | undefined
+
+  /** 同步执行 PowerShell 并取标准输出，失败时返回空字符串 */
+  const runPowerShell = (script: string): string => {
+    const result = spawnSync('powershell', ['-NoProfile', '-Command', script], {
+      windowsHide: true,
+      encoding: 'utf8',
+      timeout: 8000,
+    })
+    return String(result.stdout ?? '').trim()
+  }
+
+  /** 校验并清理候选路径：去掉引号与图标序号，确认 exe 存在 */
+  const validExe = (path: string | undefined): string | undefined => {
+    const cleaned = path?.trim().replace(/^"|"$/g, '').replace(/,\d+$/, '')
+    if (cleaned && cleaned.toLowerCase().endsWith('.exe') && existsSync(cleaned)) return cleaned
+    return undefined
+  }
+
+  /** 依次从运行中的进程、卸载注册表、开始菜单快捷方式识别启动文件 */
+  const detectExePath = (): string | undefined => {
+    const fromProcess = validExe(runPowerShell('(Get-Process -Name AUTO-MAS -ErrorAction SilentlyContinue | Select-Object -First 1).Path'))
+    if (fromProcess) return fromProcess
+    const registry = runPowerShell(
+      "$paths=@('HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'); " +
+        "Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'AUTO-MAS' } | Select-Object -First 1 -ExpandProperty DisplayIcon"
+    )
+    const fromRegistry = validExe(registry)
+    if (fromRegistry) return fromRegistry
+    const shortcuts = [
+      process.env.ProgramData ? `${process.env.ProgramData}\\Microsoft\\Windows\\Start Menu\\Programs\\AUTO-MAS.lnk` : '',
+      process.env.APPDATA ? `${process.env.APPDATA}\\Microsoft\\Windows\\Start Menu\\Programs\\AUTO-MAS.lnk` : '',
+    ].filter(Boolean)
+    for (const shortcut of shortcuts) {
+      if (!existsSync(shortcut)) continue
+      const target = runPowerShell(`$s=(New-Object -ComObject WScript.Shell).CreateShortcut('${shortcut.replace(/'/g, "''")}'); $s.TargetPath`)
+      const fromShortcut = validExe(target)
+      if (fromShortcut) return fromShortcut
+    }
+    return undefined
+  }
+
+  /** 优先使用配置里的路径；否则自动识别并缓存 */
+  const resolveMasExePath = (): string | undefined => {
+    const configured = validExe(config.masExePath)
+    if (configured) return configured
+    if (cachedExePath) return cachedExePath
+    const detected = detectExePath()
+    if (detected) {
+      cachedExePath = detected
+      logger.info(`[进程] 已自动识别 AUTO-MAS 启动路径：${detected}`)
+    }
+    return detected
+  }
+
+  const spawnMas = (exePath: string): void => {
+    if (!existsSync(exePath)) throw new Error(`找不到 AUTO-MAS 启动文件：${exePath}`)
+    const env = { ...process.env }
+    delete env.ELECTRON_RUN_AS_NODE
+    const child = spawn(exePath, [], {
+      cwd: dirname(exePath),
+      detached: true,
+      stdio: 'ignore',
+      env,
+    })
+    child.on('error', (error) => logger.warn(`[进程] 启动失败：${getErrorMessage(error)}`))
+    child.unref()
+    debugLog(config.debug, 'process', `已启动 ${exePath}（PID ${child.pid ?? 'unknown'}）`)
   }
 
   /** 指令级调试日志：记录参数、匹配结果与关键返回值 */
@@ -118,7 +244,7 @@ export function registerCommands(deps: CommandDependencies): void {
     const lines = ['请带上脚本或队列的 ID / 名称：']
     if (scriptNames.length) lines.push(`脚本：${scriptNames.map((name) => `「${name}」`).join('、')}`)
     if (queueNames.length) lines.push(`队列：${queueNames.map((name) => `「${name}」`).join('、')}`)
-    if (!scriptNames.length && !queueNames.length) lines.push('AUTO-MAS 里还没有脚本或队列。')
+    if (!scriptNames.length && !queueNames.length) lines.push('AUTO-MAS 里还没有脚本或队列')
     return lines.join('\n')
   }
 
@@ -248,7 +374,7 @@ export function registerCommands(deps: CommandDependencies): void {
         const scripts = await client.getScripts()
         const items = scriptEntries(scripts)
         trace('mas.users', `脚本 ${items.length} 个，参数「${scriptQuery ?? ''}」`)
-        if (!items.length) return 'AUTO-MAS 里还没有脚本配置。'
+        if (!items.length) return 'AUTO-MAS 里还没有脚本配置'
 
         if (!scriptQuery) {
           const lines = [`脚本与用户数量（${items.length} 个）`]
@@ -258,7 +384,7 @@ export function registerCommands(deps: CommandDependencies): void {
             lines.push(`· ${item.name} ${count} 个用户`)
           }
           trace('mas.users', `概览：${items.length} 个脚本`)
-          lines.push('用 mas用户 [脚本] 查看具体用户。')
+          lines.push('', '用 mas用户 [脚本] 查看具体用户')
           return lines.join('\n')
         }
 
@@ -269,7 +395,7 @@ export function registerCommands(deps: CommandDependencies): void {
         if (!chosen.length) {
           const names = items.map((item) => item.name)
           const hint = suggestNames(names, text)
-          return [`没有找到名称里包含「${text}」的脚本。`, hint].filter(Boolean).join('\n')
+          return [`没有找到名称里包含「${text}」的脚本`, hint].filter(Boolean).join('\n')
         }
         trace('mas.users', `命中 ${chosen.length} 个脚本：${chosen.map((item) => item.name).join('、')}`)
         const blocks: string[] = []
@@ -316,7 +442,7 @@ export function registerCommands(deps: CommandDependencies): void {
           trace('mas.start', `匹配脚本「${script.name}」（${script.uid}）`)
           const result = await client.startTask(script.uid, 'AutoProxy')
           trace('mas.start', `脚本任务已提交：${result.taskId}`)
-          return `已启动脚本「${script.name}」，任务 ID：${result.taskId}。用 mas.task ${result.taskId} 查看进度。`
+          return `已启动脚本「${script.name}」\n任务 ID ${result.taskId}\n用 mas.task ${result.taskId} 查看进度`
         }
         const queue = findQueue(queues, query)
         if (!queue) {
@@ -325,13 +451,13 @@ export function registerCommands(deps: CommandDependencies): void {
             ...queueEntries(queues).map((item) => item.name).filter(Boolean),
           ]
           const hint = suggestNames(names, query)
-          return [`没有找到 ID 或名称是「${query}」的脚本或队列。`, hint].filter(Boolean).join('\n')
+          return [`没有找到 ID 或名称是「${query}」的脚本或队列`, hint].filter(Boolean).join('\n')
         }
         trace('mas.start', `匹配队列「${queue.name}」（${queue.uid}），循环 ${cycle}`)
-        if (cycle && !queue.cycleEnabled) return `队列「${queue.name}」没有启用循环，请先去掉 -c，或在 AUTO-MAS 里打开循环。`
+        if (cycle && !queue.cycleEnabled) return `队列「${queue.name}」没有启用循环\n请先去掉 -c，或在 AUTO-MAS 里打开循环`
         const result = await client.startTask(queue.uid, cycle ? 'CycleRun' : 'AutoProxy')
         trace('mas.start', `队列任务已提交：${result.taskId}`)
-        return `已启动队列「${queue.name}」${cycle ? '（循环）' : ''}，任务 ID：${result.taskId}。`
+        return `已启动队列「${queue.name}」${cycle ? '（循环）' : ''}\n任务 ID ${result.taskId}`
       })
     })
 
@@ -355,22 +481,22 @@ export function registerCommands(deps: CommandDependencies): void {
           const names = queueEntries(queues).map((item) => item.name).filter(Boolean)
           return names.length
             ? `请带上队列 ID 或名称：${names.map((name) => `「${name}」`).join('、')}`
-            : 'AUTO-MAS 里还没有调度队列。'
+            : 'AUTO-MAS 里还没有调度队列'
         }
-        if (!tokens.length) return '请至少提供一个用户名或用户 ID；可用 mas.users 「脚本名称」 查看。'
+        if (!tokens.length) return '请至少提供一个用户名或用户 ID\n可用 mas.users 「脚本名称」 查看'
 
         const [queues, scripts] = await Promise.all([client.getQueues(), client.getScripts()])
         const queue = findQueue(queues, queueQuery)
         if (queue) trace('mas.startqueue', `匹配队列「${queue.name}」（${queue.uid}）`)
         if (!queue) {
           const hint = suggestNames(queueEntries(queues).map((item) => item.name), queueQuery)
-          return [`没有找到 ID 或名称是「${queueQuery}」的队列。`, hint].filter(Boolean).join('\n')
+          return [`没有找到 ID 或名称是「${queueQuery}」的队列`, hint].filter(Boolean).join('\n')
         }
 
         const scriptIds = queueScriptIds(await client.getQueueItems(queue.uid))
         trace('mas.startqueue', `队列项脚本 ${scriptIds.length} 个：${scriptIds.join('、')}`)
         if (!scriptIds.length) {
-          return `队列「${queue.name}」里没有已绑定脚本的队列项；先在 AUTO-MAS 里给队列添加脚本。`
+          return `队列「${queue.name}」里没有已绑定脚本的队列项\n先在 AUTO-MAS 里给队列添加脚本`
         }
 
         const resolution = await resolveQueueUsers(scriptIds, scripts, tokens)
@@ -381,8 +507,8 @@ export function registerCommands(deps: CommandDependencies): void {
         )
         if (resolution.ambiguous.length) {
           return [
-            `这些用户名在脚本里匹配到多个用户，请写得更具体：${resolution.ambiguous.join('、')}。`,
-            '可用 mas用户 [脚本] 查看用户名与 ID。',
+            `这些用户名在脚本里匹配到多个用户，请写得更具体：${resolution.ambiguous.join('、')}`,
+            '可用 mas用户 [脚本] 查看用户名与 ID',
           ].join('\n')
         }
         if (resolution.unmatched.length) {
@@ -392,7 +518,7 @@ export function registerCommands(deps: CommandDependencies): void {
           }
           const hint = suggestNames([...names], resolution.unmatched[0])
           return [
-            `这些用户没有匹配到任何脚本：${resolution.unmatched.join('、')}。`,
+            `这些用户没有匹配到任何脚本：${resolution.unmatched.join('、')}`,
             [...names].length ? `当前脚本里的用户：${[...names].slice(0, 8).join('、')}` : '',
             hint,
           ].filter(Boolean).join('\n')
@@ -408,14 +534,16 @@ export function registerCommands(deps: CommandDependencies): void {
           if (message.includes('不属于脚本')) {
             return [
               `启动失败：${message}`,
-              '提示：用户必须来自脚本配置内部，不能直接用 QQ 号；先用 mas.users 「脚本名称」 查看用户名和用户 ID。',
+              '提示：用户必须来自脚本配置内部，不能直接用 QQ 号',
+              '先用 mas.users 「脚本名称」 查看用户名和用户 ID',
             ].join(String.fromCharCode(10))
           }
           throw error
         }
         trace('mas.startqueue', `任务已提交：${result.taskId}，用户 ${users.size} 个，脚本 ${matchedCounts.length} 个`)
-        const lines = [`已用 ${users.size} 个用户启动队列「${queue.name}」中的 ${matchedCounts.length} 个脚本，任务 ID：${result.taskId}。`]
-        if (resolution.skipped.length) lines.push(`跳过的脚本：${resolution.skipped.join('、')}（这些脚本里没有匹配的用户）。`)
+        const lines = [`已用 ${users.size} 个用户启动队列「${queue.name}」中的 ${matchedCounts.length} 个脚本`,
+`任务 ID ${result.taskId}`]
+        if (resolution.skipped.length) lines.push('', `跳过的脚本 ${resolution.skipped.join('、')}（这些脚本里没有匹配的用户）`)
         return lines.join('\n')
       })
     })
@@ -435,13 +563,13 @@ export function registerCommands(deps: CommandDependencies): void {
         }
         trace('mas.stop', `停止任务 ${taskId}`)
         await client.stopTask(taskId)
-        return `已请求停止任务 ${taskId}。用 mas.task ${taskId} 确认状态。`
+        return `已请求停止任务 ${taskId}\n用 mas.task ${taskId} 确认状态`
       })
     })
 
   alias(ctx.command('mas.power [action:string]', '执行电源操作'), 'mas电源')
     .option('yes', '-y, --yes 确认执行')
-    .usage('危险操作，会中断当前任务并影响 AUTO-MAS 所在的主机；必须加 -y 才会执行。')
+    .usage('设置所有任务结束后执行的电源操作（控制电脑关机、重启、休眠等），不会立即执行；必须加 -y 确认。NoAction 表示取消。')
     .example('mas.power')
     .example('mas.power 重启 -y')
     .action(({ session, options }, action) => {
@@ -451,13 +579,85 @@ export function registerCommands(deps: CommandDependencies): void {
       trace('mas.power', `操作「${action}」，确认 ${Boolean(options?.yes)}`)
       const signal = resolvePowerSignal(action)
       if (!signal) {
-        return `无法识别电源操作「${action}」；支持：${POWER_SIGNALS.join(' / ')}，也可以用中文（关机、重启、休眠等）。`
+        return `无法识别电源操作「${action}」\n支持：${POWER_SIGNALS.join(' / ')}，也可以用中文（关机、重启、休眠等）`
       }
-      if (!options?.yes) return `即将执行 ${signal}，会中断当前任务。确认请改为：mas.power ${action} -y`
+      if (!options?.yes) return `将设置电源操作 ${signal}，在所有任务结束后执行\n确认请改为：mas.power ${action} -y`
       return run('mas.power', async () => {
         trace('mas.power', `提交信号 ${signal}`)
         await client.setPower(signal)
-        return `已提交电源操作 ${signal}。`
+        return `已设置电源操作 ${signal}\n将在所有任务结束后执行；当前没有运行任务时不会触发\n用 mas.power NoAction -y 可取消`
+      })
+    })
+
+  alias(ctx.command('mas.process [action:string]', '管理 AUTO-MAS 进程'), 'mas进程')
+    .option('yes', '-y, --yes 确认执行')
+    .usage('查看、关闭、启动或重启 AUTO-MAS；同机关闭会退出窗口与后端，跨机只能关闭后端；启动和重启需要同机并配置启动路径。必须加 -y 才会执行。')
+    .example('mas.process')
+    .example('mas.process 重启 -y')
+    .action(({ session, options }, action) => {
+      if (!session) return ''
+      if (!checkAdmin(session, 'mas.process')) return ''
+      const text = String(action ?? '').trim()
+      const command = resolveProcessAction(text)
+      trace('mas.process', `操作「${text || '状态'}」，确认 ${Boolean(options?.yes)}`)
+      if (!text || command === 'status') {
+        return run('mas.process', async () => {
+          const health = await client.health().catch(() => undefined)
+          const local = isLocalBaseUrl(config.baseUrl)
+          return [
+            `AUTO-MAS ${health?.ready ? `运行中 · ${health.version ?? 'unknown'}` : '未运行'}`,
+            '',
+            `进程管理 ${config.processControl ? '已启用' : '未启用'}`,
+            `启动路径 ${resolveMasExePath() ?? '未识别'}`,
+            `地址 ${config.baseUrl}（${local ? '同机' : '跨机，仅支持关闭后端'}）`,
+          ].join('\n')
+        })
+      }
+      if (!command) return `无法识别操作「${text}」\n支持：状态、关闭、启动、重启`
+      if (command === 'close') {
+        if (!options?.yes) {
+          const scope = isLocalBaseUrl(config.baseUrl) ? '并退出窗口' : '（仅后端）'
+          return `将关闭 AUTO-MAS${scope}，正在运行的任务会被中断\n确认请改为：mas.process 关闭 -y`
+        }
+        return run('mas.process', async () => {
+          const local = isLocalBaseUrl(config.baseUrl)
+          const health = await client.health().catch(() => undefined)
+          if (health?.ready) {
+            await client.close().catch((error) => debugLog(config.debug, 'process', `关闭请求失败：${getErrorMessage(error)}`))
+            await waitForHealth(false, Math.min(config.processTimeout, 20))
+          }
+          if (!local) {
+            return '已请求关闭远程 AUTO-MAS 的后端\n跨机部署无法关闭那台机器上的窗口，需要手动退出程序'
+          }
+          killMasProcesses()
+          const gone = await waitForProcessExit(15)
+          trace('mas.process', `关闭进程：${gone ? '完成' : '超时'}`)
+          return gone
+            ? '已关闭 AUTO-MAS（窗口与后端）'
+            : '后端已关闭，但还有 AUTO-MAS 进程没有退出\n请到任务管理器检查'
+        })
+      }
+      if (!config.processControl) return '进程管理未启用\n请先在配置的「进程管理」中开启'
+      if (!isLocalBaseUrl(config.baseUrl)) return '当前连接的是跨机 AUTO-MAS\n插件只能在同机拉起进程，关闭可以正常使用'
+      const exePath = resolveMasExePath()
+      if (!exePath) return '自动识别 AUTO-MAS 启动路径失败\n请在配置的「进程管理」中填写启动文件路径'
+      if (!options?.yes) return `将${commandLabel(command)} AUTO-MAS（会先退出当前进程）\n确认请改为：mas.process ${text} -y`
+      return run('mas.process', async () => {
+        const health = await client.health().catch(() => undefined)
+        if (command === 'start' && health?.ready) return `AUTO-MAS 已在运行（${health.version ?? 'unknown'}），无需启动`
+        if (command === 'restart' && health?.ready) {
+          await client.close().catch((error) => debugLog(config.debug, 'process', `关闭请求失败：${getErrorMessage(error)}`))
+          await waitForHealth(false, Math.min(config.processTimeout, 20))
+        }
+        killMasProcesses()
+        const gone = await waitForProcessExit(15)
+        trace('mas.process', `清理旧进程：${gone ? '完成' : '超时'}`)
+        if (!gone) return '旧进程没有完全退出，已取消启动，避免出现两个实例'
+        spawnMas(exePath)
+        const ready = await waitForHealth(true, config.processTimeout)
+        if (!ready) return '已启动进程，但在等待时间内没有就绪\n请查看 AUTO-MAS 的日志'
+        const next = await client.health().catch(() => undefined)
+        return `已${command === 'restart' ? '重启' : '启动'} AUTO-MAS${next?.version ? `（${next.version}）` : ''}`
       })
     })
 
@@ -489,18 +689,18 @@ export function registerCommands(deps: CommandDependencies): void {
         const captureWindow = async () => {
           const result = await client.screenshot(title?.trim() || config.gameWindow)
           trace('mas.screenshot', `窗口截图返回 ${result.image_base64?.length ?? 0} 字节 base64`)
-          return screenshotImage(result, 'AUTO-MAS 没有返回图片，请确认游戏窗口标题是否正确。')
+          return screenshotImage(result, 'AUTO-MAS 没有返回图片，请确认游戏窗口标题是否正确')
         }
         const captureAdb = async (): Promise<string | Element> => {
           const target = await resolveAdbTarget(client, config)
           trace('mas.screenshot', `ADB 目标：path=${target.adbPath ?? '(空)'}，serial=${target.serial ?? '(空)'}，备注 ${target.notes.length} 条`)
           if (!target.adbPath || !target.serial) {
             const hint = target.notes.length ? `\n${target.notes.join('\n')}` : ''
-            throw new Error(`没有找到可用的 ADB：先启动模拟器，或在「截图」分组填写 adb 路径与设备序列号。${hint}`)
+            throw new Error(`没有找到可用的 ADB\n先启动模拟器，或在「截图」分组填写 adb 路径与设备序列号${hint}`)
           }
           const result = await client.screenshotAdb(target.adbPath, target.serial)
           trace('mas.screenshot', `ADB 截图返回 ${result.image_base64?.length ?? 0} 字节 base64`)
-          return screenshotImage(result, 'ADB 没有返回图片，请确认设备序列号是否正确。')
+          return screenshotImage(result, 'ADB 没有返回图片，请确认设备序列号是否正确')
         }
         if (mode === 'adb') return captureAdb()
         if (mode === 'window') return captureWindow()
@@ -536,7 +736,7 @@ export function registerCommands(deps: CommandDependencies): void {
         trace('mas.push', `参数「${address ?? ''}」，enable=${Boolean(options?.enable)}，disable=${Boolean(options?.disable)}，test=${Boolean(options?.test)}`)
         if (options?.disable) {
           await client.updateNotifySetting({ IfKoishiSupport: false })
-          return '已关闭 AUTO-MAS 的 Koishi 推送。'
+          return '已关闭 AUTO-MAS 的 Koishi 推送'
         }
         if (options?.enable) {
           const target = String(address ?? '').trim() || expectedPushAddress(config)
@@ -546,23 +746,25 @@ export function registerCommands(deps: CommandDependencies): void {
             KoishiToken: config.token,
           })
           return [
-            '已启用 AUTO-MAS 的 Koishi 推送。',
+            '已启用 AUTO-MAS 的 Koishi 推送',
             `地址 ${target}`,
             `令牌 ${config.token ? '与插件一致' : '未设置'}`,
-            '设置已写入；需要重启一次 AUTO-MAS 才会启动推送通道。',
-            '重启后可用 mas推送 -t 验证。',
+            '设置已写入',
+            '需要重启一次 AUTO-MAS 才会启动推送通道',
+            '重启后可用 mas推送 -t 验证',
           ].join('\n')
         }
         if (options?.test) {
           try {
             await client.testNotify()
-            return '已请求 AUTO-MAS 发送测试通知，请查看聊天目标是否收到。'
+            return '已请求 AUTO-MAS 发送测试通知\n请查看聊天目标是否收到'
           } catch (error) {
             const message = getErrorMessage(error)
             if (/koishi/i.test(message)) {
               return [
                 `测试通知发送失败：${message}`,
-                'AUTO-MAS 的 Koishi 推送通道未启动。修改推送设置后需要重启一次 AUTO-MAS。',
+                'AUTO-MAS 的 Koishi 推送通道未启动',
+                '修改推送设置后需要重启一次 AUTO-MAS',
                 '重启后仍失败时，检查 KoishiServerAddress 是否为 ws://<Koishi 地址>:<端口>/AUTO_MAS，以及该端口是否可达。',
               ].join('\n')
             }
@@ -598,7 +800,7 @@ export function registerCommands(deps: CommandDependencies): void {
 
 function formatPowerHelp(): string {
   return [
-    '电源操作会中断当前任务并影响 AUTO-MAS 所在的主机，必须加 -y 才会执行。',
+    '电源操作控制电脑关机、重启、休眠、注销等，在所有任务结束后执行，不会立即生效；必须加 -y 确认',
     '支持的写法：',
     '- 关机 / shutdown',
     '- 强制关机 / shutdownforce',
@@ -610,6 +812,20 @@ function formatPowerHelp(): string {
     '- 注销 / logoff',
     '示例：mas.power 重启 -y',
   ].join('\n')
+}
+
+function resolveProcessAction(input: string): 'status' | 'close' | 'start' | 'restart' | undefined {
+  const text = input.trim().toLowerCase()
+  if (!text) return 'status'
+  if (['状态', '查看', 'status'].includes(text)) return 'status'
+  if (['关闭', '退出', 'close', 'stop'].includes(text)) return 'close'
+  if (['启动', 'start', 'launch'].includes(text)) return 'start'
+  if (['重启', 'restart', 'relaunch'].includes(text)) return 'restart'
+  return undefined
+}
+
+function commandLabel(command: 'start' | 'restart'): string {
+  return command === 'restart' ? '重启' : '启动'
 }
 
 function resolvePowerSignal(input: string | undefined): string | undefined {

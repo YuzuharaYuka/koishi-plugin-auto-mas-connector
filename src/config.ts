@@ -4,6 +4,7 @@ import {
   DEFAULT_GAME_WINDOW,
   DEFAULT_IMAGE_WIDTH,
   DEFAULT_LISTEN_PATH,
+  DEFAULT_PROCESS_TIMEOUT,
   DEFAULT_STANDALONE_PORT,
   NOTIFICATION_CATEGORIES,
 } from './constants'
@@ -44,6 +45,12 @@ export interface Config {
   host: string
   /** 独立监听端口 */
   port: number
+  /** 允许通过指令控制 AUTO-MAS 进程 */
+  processControl: boolean
+  /** AUTO-MAS 启动文件路径 */
+  masExePath: string
+  /** 等待进程启动/关闭的秒数 */
+  processTimeout: number
   notifyEnabled: boolean
   notifyTargets: NotifyTarget[]
   /** 全局接收类别 */
@@ -111,6 +118,21 @@ export const Config: Schema<Config> = Schema.intersect([
       .default(DEFAULT_STANDALONE_PORT)
       .description('独立监听端口'),
   }).description('推送服务'),
+
+  Schema.object({
+    processControl: Schema.boolean()
+      .default(false)
+      .description('允许通过 mas.process 关闭、启动或重启 AUTO-MAS'),
+    masExePath: Schema.string()
+      .default('')
+      .description('AUTO-MAS 启动文件路径；留空自动识别'),
+    processTimeout: Schema.number()
+      .min(10)
+      .max(300)
+      .step(5)
+      .default(DEFAULT_PROCESS_TIMEOUT)
+      .description('等待启动或关闭的秒数'),
+  }).description('进程管理'),
 
   Schema.object({
     notifyEnabled: Schema.boolean()
@@ -211,6 +233,9 @@ export function normalizeConfig(raw: Config): Config {
     token: String(raw.token ?? '').trim(),
     host: String(raw.host ?? '').trim() || '127.0.0.1',
     port: clampNumber(raw.port, 1024, 65535, DEFAULT_STANDALONE_PORT),
+    processControl: raw.processControl === true,
+    masExePath: String(raw.masExePath ?? '').trim(),
+    processTimeout: clampNumber(raw.processTimeout, 10, 300, DEFAULT_PROCESS_TIMEOUT),
     notifyEnabled: raw.notifyEnabled !== false,
     notifyTargets: normalizeTargets(raw.notifyTargets),
     notifyEvents: normalizeCategorySettings(raw.notifyEvents),
