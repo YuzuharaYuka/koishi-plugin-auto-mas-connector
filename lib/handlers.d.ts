@@ -41,6 +41,16 @@ export declare function matchUsers(users: Array<{
 /** 取出队列项里已绑定脚本的 ID；未绑定（"-"）的项跳过，按队列顺序去重 */
 export declare function queueScriptIds(result: QueueItemGetOut): string[];
 export declare function formatPower(snapshot: PowerCountdownSnapshot): string;
+/** 记录自身的日期（兼容 v5.7 的 date 与 v5.8 的 time），无法解析时返回空串 */
+export declare function historyRecordDate(record: {
+    time?: string;
+    date?: string;
+}): string;
+/**
+ * 按记录自身时间重新分组并裁剪到 start..end。
+ * 后端按归档日期分组，v5.7 会把凌晨记录归到前一天，导致“最近 1 天”漏记录。
+ */
+export declare function filterHistory(result: HistorySearchOut, start: string, end: string): HistorySearchOut;
 export declare function formatHistory(result: HistorySearchOut): string;
 export declare function formatHistoryDetail(detail: HistoryDetail): string;
 /** 列出脚本下的用户；只展示名称与用户 ID，不带账号等隐私字段 */

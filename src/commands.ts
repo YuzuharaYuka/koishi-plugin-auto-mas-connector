@@ -9,6 +9,7 @@ import { DEFAULT_LISTEN_PATH, HELP_TEXT, POWER_ALIASES, POWER_SIGNALS } from './
 import {
   findQueue,
   findScript,
+  filterHistory,
   formatHistory,
   formatPower,
   formatQueueList,
@@ -508,8 +509,11 @@ export function registerCommands(deps: CommandDependencies): void {
         const span = clampNumber(days ?? 1, 1, 90, 1)
         const end = new Date()
         const start = new Date(end.getTime() - (span - 1) * DAY)
+        // 后端按归档日期分组，v5.7 的凌晨记录会落到前一天，因此多查一天再按记录时间裁剪
+        const queryStart = new Date(start.getTime() - DAY)
         trace('mas.history', `${span} 天：${formatDate(start)} ~ ${formatDate(end)}`)
-        const result = await client.searchHistory('DAILY', formatDate(start), formatDate(end))
+        const raw = await client.searchHistory('DAILY', formatDate(queryStart), formatDate(end))
+        const result = filterHistory(raw, formatDate(start), formatDate(end))
         trace('mas.history', `返回 ${Object.keys(result.data ?? {}).length} 天记录`)
         return formatHistory(result)
       })

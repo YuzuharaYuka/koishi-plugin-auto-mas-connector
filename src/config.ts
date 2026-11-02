@@ -22,6 +22,8 @@ export interface NotifyTarget {
   channelId: string
   /** 接收类别；空数组表示全部 */
   events: string[]
+  /** 关键词，逗号分隔；命中标题或正文才接收，留空不过滤 */
+  keywords: string
 }
 
 /** 全局接收类别，按表格顺序展示，enabled 控制是否接收 */
@@ -55,7 +57,7 @@ export interface Config {
   notifyTargets: NotifyTarget[]
   /** 全局接收类别 */
   notifyEvents: NotifyCategorySetting[]
-  /** 把 HTML 推送渲染成图片 */
+  /** 把推送文本渲染成图片 */
   notifyImage: boolean
   /** 纯文本推送使用合并转发 */
   mergeForward: boolean
@@ -140,7 +142,7 @@ export const Config: Schema<Config> = Schema.intersect([
       .description('接收 AUTO-MAS 推送'),
     notifyImage: Schema.boolean()
       .default(true)
-      .description('HTML 推送转为图片'),
+      .description('把通知文本渲染为图片发送'),
     sendImages: Schema.boolean()
       .default(true)
       .description('转发推送中的图片'),
@@ -177,11 +179,14 @@ export const Config: Schema<Config> = Schema.intersect([
       events: Schema.array(Schema.union(categoryChoices))
         .role('checkbox')
         .default([])
-        .description('类别；留空表示全部'),
+        .description('类别'),
+      keywords: Schema.string()
+        .default('')
+        .description('关键词'),
     }))
       .role('table')
       .default([])
-      .description('**推送目标**<br>类别留空表示全部'),
+      .description('**推送目标**<br>类别与关键词留空表示不过滤，关键词用逗号分隔'),
   }).description('通知'),
 
   Schema.object({
@@ -267,7 +272,13 @@ function normalizeTargets(input: unknown): NotifyTarget[] {
     const key = `${platform}:${channelType}:${channelId}`
     if (seen.has(key)) continue
     seen.add(key)
-    targets.push({ platform, channelType, channelId, events: normalizeEventList(record.events) })
+    targets.push({
+      platform,
+      channelType,
+      channelId,
+      events: normalizeEventList(record.events),
+      keywords: String(record.keywords ?? '').trim(),
+    })
   }
   return targets
 }

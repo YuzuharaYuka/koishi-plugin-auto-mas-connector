@@ -4,7 +4,7 @@ import type { PushPayload } from './types';
 interface RenderedNotification {
     /** 用于分类与文本回退的纯文本 */
     text: string;
-    /** HTML 渲染出的图片，渲染失败为空 */
+    /** 文本渲染出的图片，渲染失败为空 */
     image?: Buffer;
 }
 /** 按 AUTO-MAS 的 msgtype 渲染通知：text / html / picture */

@@ -72,7 +72,7 @@ interface LayoutRuleItem {
 
 type LayoutItem = LayoutTextItem | LayoutImageItem | LayoutRuleItem
 
-const FONT_STACK = '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif'
+const FONT_STACK = '"Microsoft YaHei", "Segoe UI Emoji", "Noto Color Emoji", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif'
 const PAGE_BACKGROUND = '#ffffff'
 const TEXT_COLOR = '#1f2937'
 const HEADING_COLOR = '#111827'

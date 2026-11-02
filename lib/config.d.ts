@@ -10,6 +10,8 @@ export interface NotifyTarget {
     channelId: string;
     /** 接收类别；空数组表示全部 */
     events: string[];
+    /** 关键词，逗号分隔；命中标题或正文才接收，留空不过滤 */
+    keywords: string;
 }
 /** 全局接收类别，按表格顺序展示，enabled 控制是否接收 */
 export interface NotifyCategorySetting {
@@ -41,7 +43,7 @@ export interface Config {
     notifyTargets: NotifyTarget[];
     /** 全局接收类别 */
     notifyEvents: NotifyCategorySetting[];
-    /** 把 HTML 推送渲染成图片 */
+    /** 把推送文本渲染成图片 */
     notifyImage: boolean;
     /** 纯文本推送使用合并转发 */
     mergeForward: boolean;

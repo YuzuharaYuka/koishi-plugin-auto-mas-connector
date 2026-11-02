@@ -8,7 +8,7 @@ import { debugLog, getErrorMessage, htmlToText, logger } from './utils'
 interface RenderedNotification {
   /** 用于分类与文本回退的纯文本 */
   text: string
-  /** HTML 渲染出的图片，渲染失败为空 */
+  /** 文本渲染出的图片，渲染失败为空 */
   image?: Buffer
 }
 
@@ -33,14 +33,24 @@ export async function renderPayload(payload: PushPayload, options: { sendImages:
 
   if (type === 'html' && options.notifyImage) {
     try {
-      const image = await renderNotificationImage(message, { width: options.imageWidth })
+      const html = text
+        .split(new RegExp('\r?\n'))
+        .map(line => line.trim())
+        .filter(Boolean)
+        .map(line => `<p>${escapeHtml(line)}</p>`)
+        .join('')
+      const image = await renderNotificationImage(html, { width: options.imageWidth })
       if (image) return { text, image }
-      debugLog(true, 'notify', 'HTML 渲染图片为空，回退文本')
+      debugLog(true, 'notify', '文本渲染图片为空，回退文本')
     } catch (error) {
-      debugLog(options.debug, '通知', `HTML 渲染图片失败，回退文本: ${getErrorMessage(error)}`)
+      debugLog(options.debug, '通知', `文本渲染图片失败，回退文本: ${getErrorMessage(error)}`)
     }
   }
   return { text }
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 function decodeBase64Image(value: string): { buffer: Buffer; mime: string } | undefined {
@@ -137,8 +147,7 @@ export class Notifier {
     }
 
     const targets = this.config.notifyTargets.filter((target) => {
-      const accepted = this.acceptTarget(target, categories)
-      if (!accepted) debugLog(this.config.debug, 'notify', `${describeTarget(target)} 未订阅类别 ${categories.join(',')}`)
+      const accepted = this.acceptTarget(target, categories, rendered.text)
       return accepted
     })
     if (!targets.length) {
@@ -188,10 +197,24 @@ export class Notifier {
     return categories.some((category) => enabled.includes(category))
   }
 
-  private acceptTarget(target: NotifyTarget, categories: string[]): boolean {
+  private acceptTarget(target: NotifyTarget, categories: string[], text: string): boolean {
     const events = target.events ?? []
-    if (!events.length) return true
-    return categories.some((category) => events.includes(category))
+    if (events.length && !categories.some((category) => events.includes(category))) {
+      debugLog(this.config.debug, 'notify', `${describeTarget(target)} 未订阅类别 ${categories.join(',')}`)
+      return false
+    }
+    const keywords = (target.keywords ?? '')
+      .split(/[,，]/)
+      .map((keyword) => keyword.trim())
+      .filter(Boolean)
+    if (!keywords.length) return true
+    const haystack = text.toLowerCase()
+    const hit = keywords.find((keyword) => haystack.includes(keyword.toLowerCase()))
+    if (!hit) {
+      debugLog(this.config.debug, 'notify', `${describeTarget(target)} 未命中关键词 ${keywords.join(',')}`)
+      return false
+    }
+    return true
   }
 
   private async deliver(target: NotifyTarget, rendered: RenderedNotification): Promise<void> {

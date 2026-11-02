@@ -11,8 +11,8 @@ import { debugLog, expectedPushAddress, getErrorMessage, logger, raiseDebugLevel
 export * from './config'
 export const name = PLUGIN_NAME
 
-/** server 是可选服务：同机部署时把推送服务挂到 Koishi 的 HTTP 端口上 */
-export const inject = { optional: ['server'] }
+/** 推送服务需要 Koishi 的 HTTP 服务；server 为必需服务 */
+export const inject = ['server']
 
 export const usage = USAGE_MARKDOWN
 

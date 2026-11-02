@@ -6,8 +6,8 @@
 
 - 查询状态、任务、队列、脚本、用户、历史
 - 启动脚本或队列、停止任务、电源操作
-- 接收推送并按类别转发到群聊或私聊
-- HTML 推送转图片，文本推送合并转发
+- 接收推送并按类别、关键词转发到群聊或私聊
+- 通知文本渲染为图片，长文本合并转发
 - 窗口截图，失败时可回退 ADB
 - 关闭、启动或重启 AUTO-MAS（同机关闭窗口与后端，跨机只能关闭后端）
 
@@ -20,7 +20,7 @@
 | `listenMode` | 推送服务方式：自动、复用 Koishi 服务、独立监听 |
 | `listenPath` | 推送路径，需与 AUTO-MAS 的推送地址一致，默认 `/AUTO_MAS` |
 | `token` | 与 AUTO-MAS 的 `KoishiToken` 一致；留空不校验 |
-| `notifyTargets` | 推送目标：平台、会话类型、会话 ID、接收类别 |
+| `notifyTargets` | 推送目标：平台、会话类型、会话 ID、接收类别、关键词 |
 | `notifyEvents` | 全局接收类别，关闭后不接收该类通知 |
 | `mergeForward` | 文本通知使用合并转发，图片直接发送 |
 | `screenshotMode` | 截图方式：自动、窗口、ADB |
@@ -52,7 +52,7 @@ webhook 与 Koishi 是两种通道：指向 `/AUTO_MAS` 的 HTTP POST 属于 web
 ## 常见问题
 
 - `测试通知发送失败: 部分通知发送失败: 全局 Koishi`：Koishi 推送通道未启动。重启 AUTO-MAS；仍失败时检查地址、端口与 `token`。
-- 收不到通知：检查 `notifyTargets` 是否包含目标、`notifyEvents` 是否关闭了对应类别。
+- 收不到通知：检查 `notifyTargets` 是否包含目标、`notifyEvents` 是否关闭了对应类别、`keywords` 是否未命中。
 - 通知集中到达：AUTO-MAS 在整批任务结束后统一投递。
 
 ## 指令

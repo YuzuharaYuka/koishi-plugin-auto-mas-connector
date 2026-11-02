@@ -5,6 +5,7 @@ import type {
   EmulatorGetOut,
   EmulatorStatusOut,
   HistoryDetail,
+  HistoryBucket,
   HistorySearchOut,
   PowerCountdownSnapshot,
   QueueGetOut,
@@ -221,6 +222,34 @@ export function formatPower(snapshot: PowerCountdownSnapshot): string {
   const action = snapshot.operation ?? '未知操作'
   const remaining = typeof snapshot.remaining === 'number' ? `${snapshot.remaining} 秒` : '未知'
   return `待执行电源操作 ${action} · 剩余 ${remaining}`
+}
+
+/** 记录自身的日期（兼容 v5.7 的 date 与 v5.8 的 time），无法解析时返回空串 */
+export function historyRecordDate(record: { time?: string; date?: string }): string {
+  const value = record.time ?? record.date
+  if (typeof value !== 'string') return ''
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(value)
+  return match?.[1] ?? ''
+}
+
+/**
+ * 按记录自身时间重新分组并裁剪到 start..end。
+ * 后端按归档日期分组，v5.7 会把凌晨记录归到前一天，导致“最近 1 天”漏记录。
+ */
+export function filterHistory(result: HistorySearchOut, start: string, end: string): HistorySearchOut {
+  const data: Record<string, Record<string, HistoryBucket>> = {}
+  for (const users of Object.values(result.data ?? {})) {
+    for (const [username, bucket] of Object.entries(users ?? {})) {
+      for (const record of bucket.index ?? []) {
+        const day = historyRecordDate(record)
+        if (!day || day < start || day > end) continue
+        data[day] ??= {}
+        data[day][username] ??= { index: [] }
+        data[day][username].index?.push(record)
+      }
+    }
+  }
+  return { data }
 }
 
 export function formatHistory(result: HistorySearchOut): string {
